@@ -36,8 +36,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the card's JS file and the websocket commands (once)."""
     hass.data.setdefault(DOMAIN, {})
     frontend_dir = Path(__file__).parent / "frontend"
+    # cache_headers=True lets the browser / companion app keep the card after the first download, so it is
+    # available instantly when the app restarts (e.g. after switching from mobile data to Wi-Fi). Safe, because
+    # the URL carries the version below: every release gets a new URL and is fetched again.
     await hass.http.async_register_static_paths(
-        [StaticPathConfig(CARD_URL_BASE, str(frontend_dir), cache_headers=False)]
+        [StaticPathConfig(CARD_URL_BASE, str(frontend_dir), cache_headers=True)]
     )
     # the version in the URL makes browsers fetch the new card after every release
     version = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]

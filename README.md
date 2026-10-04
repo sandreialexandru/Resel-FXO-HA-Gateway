@@ -214,6 +214,8 @@ Card options:
 - **card-mod:** the root is `<ha-card>` and every part has a class (`.header`, `.status`, `.meter`, `.answer`, `.hangup`, `.ptt`, `.custom`). Custom buttons expose `data-state`, for example `.custom[data-state="on"] { … }`.
 - **Status strings:** the card expects the ESPHome text sensor to report `Inactiv`, `Suna`, `Conectare`, `In apel - ascult` and `In apel - vorbesc`.
 
+**Troubleshooting: "Custom element doesn't exist: resel-intercom-card".** The integration loads the card by itself, so no Lovelace resource is needed. If you added one by hand earlier, delete it (Settings → Dashboards → Resources), otherwise the card is loaded twice, possibly in an old version. The card file is cached by the browser/companion app (its URL carries the version), so after the first download it is available at once, even when the app restarts on another network. If the error still shows up after switching networks, the script request itself failed: in the companion app use Settings → Companion app → Troubleshooting → *Reload frontend* (or clear the frontend cache).
+
 ---
 
 ## Status
