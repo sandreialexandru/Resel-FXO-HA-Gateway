@@ -59,7 +59,7 @@ The Home Assistant side keeps **one** connection to the ESP32 and fans it out to
 - Measured on a multimeter: on hook the line sits around **50 V**; during a ring the AC voltage jumps to about **50–60 V** and drops to 0 in a repeating burst pattern.
 - Measured with the ESP32 circuit: with the hook output high the line reads about **8 V**, the same as with the handset lifted.
 - The speaker and microphone gain potentiometers are on the exterior central unit, not in the apartment.
-- **The door opens with key `0`.** It works with both pulse and tone dialing on the post. `008` switches the stair light, and `#0` calls the building panel (tone mode).
+- **The door opens with key `0`.** It works with both pulse and tone dialing on the post. `#0` calls the building panel (tone mode).
 - The panel closes the call after opening the door, so the firmware always puts the line back on hook after a door command.
 - Calls last at most about one minute, so the firmware watchdog (v7h) releases the line after 1 minute.
 
@@ -192,9 +192,6 @@ buttons:                  # shown 2 per row under the PTT button
   - name: Open door
     icon: mdi:door-open
     entity: button.resel_fxo_gateway_interfon_deschide_usa
-  - name: Stair light
-    icon: mdi:lightbulb-on-outline
-    entity: button.resel_fxo_gateway_interfon_lumina_scara_008
   - name: Call panel
     icon: mdi:phone-outgoing
     entity: button.resel_fxo_gateway_interfon_cheama_panoul_0
@@ -206,15 +203,74 @@ buttons:                  # shown 2 per row under the PTT button
     state_colors: { "on": red }
 ```
 
-Card options:
+Card options (everything except `entities`/`buttons` is optional; the value shown is the default):
 
-- **Buttons:** each takes `name`, `icon`, `entity` (button, script, scene, switch, light… act sensibly by domain) or a `tap_action` (`perform-action`, `toggle`, `more-info`, `navigate`, `url`). Extra keys: `disabled_when` (list of `idle`, `ringing`, `connecting`, `listening`, `talking`, `in_call`), `state_icons`, `state_colors`.
-- **Hum filter:** the line noise is mostly 50 Hz and its harmonics. The card applies a comb of narrow notches (`notch_hz`, up to `notch_max_hz: 1500`, `notch_q: 30`), then the high-pass and low-pass. On a recording of the idle line this took the noise from −63 dBFS to −83 dBFS (high-pass/low-pass alone: −73 dBFS).
-- **Denoising (RNNoise):** `denoise: true` (default) runs the line audio through [RNNoise](https://jmvalin.ca/demo/rnnoise/) (a small neural noise suppressor, ~125 KB, loaded only when a call starts, see `frontend/rnnoise/NOTICE.md` for credits and license). The card resamples 16 kHz to 48 kHz and back, adding about 20 ms. On a synthetic test the pauses between words dropped from −74 to −101 dBFS with the speech preserved. If it fails to load, the card silently falls back to the plain filters.
-- **Noise gate:** `gate: true` (default) mutes the line between words. It follows the noise floor by itself (`gate_margin_db: 8` above the floor, `gate_hold_ms: 250`); set `gate_db` for a fixed threshold, and `gate_floor_db` to clamp the lowest floor.
-- **Leveler:** `leveler: false` (default). When on, a slow automatic gain brings quiet voices to `leveler_target_db` (−20) with at most `leveler_max_gain_db` (+18), followed by a soft limiter. It adds gain, so lower `gain` when you enable it.
-- **Your microphone:** the browser's `mic_echo_cancel`, `mic_noise_suppress` and `mic_auto_gain` processing (all `true` by default) can each be switched off.
-- **Texts:** all UI texts are English and can be overridden with `labels:`.
+**General**
+
+| Option | Default | What it does |
+|---|---|---|
+| `entity_prefix` | `resel_fxo_gateway_interfon_` | Prefix of the ESPHome entities. If your device name differs (for example a `hall_` area prefix), set this or list every entity under `entities`. |
+| `entities` | derived from the prefix | Explicit entity ids: `state`, `answer`, `hangup`, `ptt`, `level` (and `door_open`, `call_panel`, `answer_open` for the default buttons). Anything you set overrides the prefix. |
+| `title` | `Intercom` | Card title. |
+| `show_header` | `true` | Show the title and the state chip. |
+| `show_level` | `true` | Show the level meter. |
+| `show_timer` | `false` | While talking, show the elapsed time against `ptt_timeout`. |
+| `labels` | English | Override any UI text (for translation). |
+
+**Talking (push-to-talk)**
+
+| Option | Default | What it does |
+|---|---|---|
+| `ptt_mode` | `hold` | `hold`: talk while the button is pressed. `toggle`: tap to start, tap to stop. |
+| `ptt_timeout` | `30` | Only used by `show_timer`: the maximum talk time shown next to the elapsed time (the card does not cut the call itself). |
+| `mic_gain` | `1` | Gain applied to your microphone before it is sent to the line. |
+| `mic_echo_cancel` | `true` | Browser echo cancellation on your microphone. |
+| `mic_noise_suppress` | `true` | Browser noise suppression on your microphone. |
+| `mic_auto_gain` | `true` | Browser automatic gain control on your microphone. Turn the three `mic_*` flags off if your voice sounds pumped or too quiet. |
+
+**Line audio: filters** (what you hear from the line)
+
+| Option | Default | What it does |
+|---|---|---|
+| `gain` | `2` | Playback gain. Lower it when you enable the leveler, which adds gain of its own. |
+| `highpass_hz` | `250` | High-pass cutoff, removes low-frequency rumble (0 = off). |
+| `lowpass_hz` | `3400` | Low-pass cutoff, removes hiss above the voice band. |
+| `notch_hz` | `50` | Mains hum filter: narrow notches on this frequency and its multiples (`60` for 60 Hz grids, `0` = off). |
+| `notch_max_hz` | `1500` | Highest harmonic that gets a notch. |
+| `notch_q` | `30` | Notch sharpness; higher means narrower notches. |
+
+**Line audio: cleaning** (processing order: denoise → gate → leveler → filters)
+
+| Option | Default | What it does |
+|---|---|---|
+| `denoise` | `true` | RNNoise neural noise suppression (see below). Falls back silently to the plain filters if it cannot load. |
+| `gate` | `true` | Noise gate: mutes the line between words. It follows the noise floor of the line by itself. |
+| `gate_margin_db` | `10` | How far above the measured noise floor the signal must rise to open the gate. Raise it if noise leaks through, lower it if word beginnings get cut. |
+| `gate_db` | unset | Fixed opening threshold in dBFS (for example `-50`) instead of the automatic one. |
+| `gate_floor_db` | `24` | How much the closed gate attenuates, in dB. A higher value is quieter but more abrupt; a lower one leaves some background. |
+| `gate_hold_ms` | `250` | How long the gate stays open after the voice stops, so word endings are not clipped. |
+| `leveler` | `false` | Slow automatic gain that brings quiet voices up to a constant level, followed by a soft limiter. |
+| `leveler_target_db` | `-24` | Target voice level in dBFS. |
+| `leveler_max_gain_db` | `15` | Largest boost the leveler may apply. |
+
+**Buttons**
+
+`buttons` is a list shown two per row under the talk button. Without it you get *Open door*, *Call panel* and *Answer & open*. Each button takes:
+
+| Key | What it does |
+|---|---|
+| `name`, `icon` | Label and `mdi:` icon. |
+| `entity` | Any button, script, scene, switch or light; the card acts sensibly by domain. |
+| `tap_action` | Instead of `entity`: `perform-action`, `toggle`, `more-info`, `navigate` or `url`. |
+| `disabled_when` | List of states in which the button is greyed out: `idle`, `ringing`, `connecting`, `listening`, `talking`, `in_call`. |
+| `state_icons`, `state_colors` | Per-state icon and color, for example for a mute switch. |
+
+**About the cleaning chain.** RNNoise ([Xiph](https://jmvalin.ca/demo/rnnoise/), BSD licence, WebAssembly build from `@jitsi/rnnoise-wasm`, credits in `frontend/rnnoise/NOTICE.md`) is a small neural noise suppressor, about 125 KB, loaded only when a call starts. The card resamples the 16 kHz line audio to 48 kHz and back, which adds about 20 ms. On a synthetic test the pauses between words dropped from −74 to −101 dBFS with the speech preserved. Start with the defaults; if the voice is quiet, enable `leveler` and keep `gain` around 4–6.
+
+**Hum filter.** The line noise is mostly 50 Hz and its harmonics. On a recording of the idle line the notch comb took the noise from −63 dBFS to −83 dBFS (high-pass/low-pass alone: −73 dBFS).
+
+**Other**
+
 - **card-mod:** the root is `<ha-card>` and every part has a class (`.header`, `.status`, `.meter`, `.answer`, `.hangup`, `.ptt`, `.custom`). Custom buttons expose `data-state`, for example `.custom[data-state="on"] { … }`.
 - **Status strings:** the card expects the ESPHome text sensor to report `Inactiv`, `Suna`, `Conectare`, `In apel - ascult` and `In apel - vorbesc`.
 
