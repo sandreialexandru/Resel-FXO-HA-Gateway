@@ -13,7 +13,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.3.1";
+const CARD_VERSION = "0.4.0";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -161,6 +161,249 @@ function b64ToBytes(b64) {
   return out;
 }
 
+// ------------------------------------------------------------------ line audio processing (16 kHz, in JS)
+// Stages, in order:  denoise (RNNoise) -> noise gate -> leveler (compressor/AGC + soft limiter).
+// Runs on the raw PCM from the line, BEFORE the WebAudio filter chain (hum notches, high/low-pass, gain).
+const RN_BASE = "/resel_fxo_gateway/rnnoise"; // served by the integration, next to this file
+const RN_IN = 160; // one RNNoise frame (10 ms) at 16 kHz
+const RN_OUT = 480; // the same 10 ms at 48 kHz (what RNNoise needs)
+const RN_TAPS = 95;
+let rnLowpass = null;
+let rnPromise = null;
+
+function designLowpass(n, fc) {
+  // Blackman-windowed sinc, DC gain 1; fc in cycles/sample
+  const h = new Float32Array(n);
+  const m = (n - 1) / 2;
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    const x = i - m;
+    const s = x === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * x) / (Math.PI * x);
+    const w = 0.42 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)) + 0.08 * Math.cos((4 * Math.PI * i) / (n - 1));
+    h[i] = s * w;
+    sum += h[i];
+  }
+  for (let i = 0; i < n; i++) h[i] /= sum;
+  return h;
+}
+
+// Loads the RNNoise WebAssembly module once (about 125 kB, cached by the browser). Resolves to null on failure.
+function loadRnnoise() {
+  if (!rnPromise) {
+    const v = encodeURIComponent(CARD_VERSION);
+    rnPromise = import(`${RN_BASE}/rnnoise.js?v=${v}`)
+      .then((m) => (m.default || m)({ locateFile: (p) => `${RN_BASE}/${p}?v=${v}` }))
+      .catch((e) => {
+        console.warn("resel-intercom-card: RNNoise could not be loaded, continuing without it", e);
+        return null;
+      });
+  }
+  return rnPromise;
+}
+
+class LineProcessor {
+  constructor(cfg) {
+    this.fs = TARGET_RATE;
+    this.denoise = cfg.denoise !== false;
+    this.gateOn = cfg.gate !== false;
+    this.levelerOn = cfg.leveler === true;
+    this.gateMargin = cfg.gate_margin_db ?? 10;
+    this.gateAbs = typeof cfg.gate_db === "number" && !Number.isNaN(cfg.gate_db) ? cfg.gate_db : null;
+    this.gateFloor = Math.pow(10, -Math.abs(cfg.gate_floor_db ?? 24) / 20);
+    this.holdBlocks = Math.max(0, Math.round((cfg.gate_hold_ms ?? 250) / 10));
+    this.levTarget = cfg.leveler_target_db ?? -24;
+    this.levMax = cfg.leveler_max_gain_db ?? 15;
+    this.rn = null; // {mod, ctx, ptr}
+    this.reset();
+  }
+
+  setRnnoise(mod) {
+    if (!mod || this.rn || !this.denoise) return;
+    try {
+      const ptr = mod._malloc(RN_OUT * 4);
+      const ctx = mod._rnnoise_create();
+      if (!ptr || !ctx) return;
+      this.rn = { mod, ctx, ptr };
+      if (!rnLowpass) rnLowpass = designLowpass(RN_TAPS, 7000 / 48000);
+      this._resetRn();
+    } catch (e) {
+      console.warn("resel-intercom-card: RNNoise init failed", e);
+      this.rn = null;
+    }
+  }
+
+  destroy() {
+    if (this.rn) {
+      try {
+        this.rn.mod._rnnoise_destroy(this.rn.ctx);
+        this.rn.mod._free(this.rn.ptr);
+      } catch (_) { /* ignore */ }
+      this.rn = null;
+    }
+  }
+
+  _resetRn() {
+    this.fifo = new Float32Array(RN_IN * 16);
+    this.fifoN = 0;
+    this.xh = new Float32Array(Math.ceil(RN_TAPS / 3) + 2); // last input samples (16 kHz)
+    this.yh = new Float32Array(RN_TAPS - 1); // last denoised samples (48 kHz)
+    this.vad = 0;
+  }
+
+  reset() {
+    const fs = this.fs;
+    this._resetRn();
+    // gate
+    const hp = 2 * Math.PI * 300 / fs; // detector high-pass (2nd order Butterworth, 300 Hz)
+    const alpha = Math.sin(hp) / (2 * 0.7071);
+    const cs = Math.cos(hp);
+    const a0 = 1 + alpha;
+    this.hb0 = (1 + cs) / 2 / a0;
+    this.hb1 = -(1 + cs) / a0;
+    this.hb2 = this.hb0;
+    this.ha1 = (-2 * cs) / a0;
+    this.ha2 = (1 - alpha) / a0;
+    this.hx1 = this.hx2 = this.hy1 = this.hy2 = 0;
+    this.pw = 0; // smoothed detector power
+    this.aPw = 1 - Math.exp(-1 / (0.01 * fs));
+    this.aAtt = 1 - Math.exp(-1 / (0.004 * fs));
+    this.aRel = 1 - Math.exp(-1 / (0.12 * fs));
+    this.blockN = 0;
+    this.minRing = new Float32Array(200).fill(-60); // detector level (dB) per 10 ms, last 2 s
+    this.ringI = 0;
+    this.open = false;
+    this.hold = 0;
+    this.gate = this.gateFloor;
+    this.delay = new Float32Array(160); // 10 ms look-ahead so the start of a word is not cut
+    this.delayI = 0;
+    // leveler
+    this.lp = 0; // smoothed level of the passed signal
+    this.aLp = 1 - Math.exp(-1 / (0.3 * fs));
+    this.levDb = 0;
+    this.levLin = 1;
+    this.levLinS = 1;
+    this.aLev = 1 - Math.exp(-1 / (0.02 * fs));
+    this.levBlock = 0;
+    this.floorDb = -60;
+    this.levelDb = -90;
+  }
+
+  // x: Float32Array, 16 kHz, -1..1. Returns a Float32Array (may be shorter/empty while a denoise frame fills).
+  process(x) {
+    let y = this.rn ? this._denoise(x) : x;
+    if (!y.length) return y;
+    if (this.gateOn || this.levelerOn) y = this._dynamics(y);
+    return y;
+  }
+
+  _denoise(x) {
+    const { mod, ctx, ptr } = this.rn;
+    if (this.fifoN + x.length > this.fifo.length) {
+      const f = new Float32Array((this.fifoN + x.length) * 2);
+      f.set(this.fifo.subarray(0, this.fifoN));
+      this.fifo = f;
+    }
+    this.fifo.set(x, this.fifoN);
+    this.fifoN += x.length;
+    const frames = Math.floor(this.fifoN / RN_IN);
+    const out = new Float32Array(frames * RN_IN);
+    const h = rnLowpass;
+    const xh = this.xh;
+    const xl = xh.length;
+    const up = new Float32Array(RN_OUT);
+    const yb = new Float32Array(this.yh.length + RN_OUT);
+    for (let f = 0; f < frames; f++) {
+      const cur = this.fifo.subarray(f * RN_IN, (f + 1) * RN_IN);
+      // upsample x3: zero-stuff + low-pass, only the non-zero taps are summed
+      for (let m = 0; m < RN_OUT; m++) {
+        let s = 0;
+        for (let j = Math.floor(m / 3), k = m - 3 * j; k < RN_TAPS; j--, k += 3) {
+          const v = j >= 0 ? cur[j] : xh[xl + j];
+          s += h[k] * v;
+        }
+        up[m] = 3 * s;
+      }
+      // keep the last input samples for the next frame
+      if (RN_IN >= xl) xh.set(cur.subarray(RN_IN - xl));
+      else { xh.copyWithin(0, RN_IN); xh.set(cur, xl - RN_IN); }
+      // RNNoise (expects 16-bit-scaled floats, 480 samples)
+      let heap = mod.HEAPF32;
+      const base = ptr >> 2;
+      for (let i = 0; i < RN_OUT; i++) heap[base + i] = up[i] * 32768;
+      this.vad = mod._rnnoise_process_frame(ctx, ptr, ptr);
+      heap = mod.HEAPF32;
+      yb.set(this.yh, 0);
+      for (let i = 0; i < RN_OUT; i++) yb[this.yh.length + i] = heap[base + i] / 32768;
+      this.yh.set(yb.subarray(RN_OUT)); // last (taps-1) samples
+      // low-pass + decimate by 3
+      for (let n = 0; n < RN_IN; n++) {
+        const c = this.yh.length + 3 * n;
+        let s = 0;
+        for (let k = 0; k < RN_TAPS; k++) s += h[k] * yb[c - k];
+        out[f * RN_IN + n] = s;
+      }
+    }
+    const rest = this.fifoN - frames * RN_IN;
+    this.fifo.copyWithin(0, frames * RN_IN, this.fifoN);
+    this.fifoN = rest;
+    return out;
+  }
+
+  _dynamics(x) {
+    const n = x.length;
+    const out = new Float32Array(n);
+    const hold = this.holdBlocks;
+    for (let i = 0; i < n; i++) {
+      const s = x[i];
+      // --- detector: 300 Hz high-passed power, 10 ms smoothing
+      const d = this.hb0 * s + this.hb1 * this.hx1 + this.hb2 * this.hx2 - this.ha1 * this.hy1 - this.ha2 * this.hy2;
+      this.hx2 = this.hx1; this.hx1 = s; this.hy2 = this.hy1; this.hy1 = d;
+      this.pw += (d * d - this.pw) * this.aPw;
+      if (++this.blockN >= 160) {
+        this.blockN = 0;
+        const db = 10 * Math.log10(this.pw + 1e-12);
+        this.levelDb = db;
+        this.minRing[this.ringI] = db;
+        this.ringI = (this.ringI + 1) % this.minRing.length;
+        let mn = 1e9;
+        for (let k = 0; k < this.minRing.length; k++) if (this.minRing[k] < mn) mn = this.minRing[k];
+        this.floorDb = Math.min(-35, Math.max(-100, mn));
+        const open = this.gateAbs !== null ? this.gateAbs : this.floorDb + this.gateMargin;
+        if (db > open) { this.open = true; this.hold = hold; }
+        else if (db < open - 4) { if (this.hold > 0) this.hold--; else this.open = false; }
+      }
+      // --- gate gain, with attack/release smoothing; the signal is delayed 10 ms behind the detector
+      const target = this.gateOn ? (this.open ? 1 : this.gateFloor) : 1;
+      this.gate += (target - this.gate) * (target > this.gate ? this.aAtt : this.aRel);
+      const dly = this.delay[this.delayI];
+      this.delay[this.delayI] = s;
+      this.delayI = (this.delayI + 1) % this.delay.length;
+      let v = dly * this.gate;
+      // --- leveler (compressor/AGC) + soft limiter
+      if (this.levelerOn) {
+        if (this.open) this.lp += (v * v - this.lp) * this.aLp;
+        if (++this.levBlock >= 160) {
+          this.levBlock = 0;
+          if (this.open) {
+            const l = 10 * Math.log10(this.lp + 1e-12);
+            let want = this.levTarget - l;
+            if (want > this.levMax) want = this.levMax;
+            if (want < -6) want = -6;
+            this.levDb += (want - this.levDb) * (want < this.levDb ? 0.2 : 0.02); // fast down, slow up
+            this.levLin = Math.pow(10, this.levDb / 20);
+          }
+        }
+        this.levLinS = (this.levLinS ?? 1) + (this.levLin - (this.levLinS ?? 1)) * this.aLev;
+        v *= this.levLinS;
+        const a = Math.abs(v);
+        if (a > 0.8) v = Math.sign(v) * (0.8 + 0.2 * Math.tanh((a - 0.8) / 0.2));
+      }
+      out[i] = v;
+    }
+    return out;
+  }
+}
+
 class ReselIntercomCard extends HTMLElement {
   constructor() {
     super();
@@ -223,6 +466,20 @@ class ReselIntercomCard extends HTMLElement {
       notch_q: Number(config.notch_q ?? 30),
       gain: Number(config.gain ?? 2),
       mic_gain: Number(config.mic_gain ?? 1),
+      // line audio cleaning (see README): RNNoise denoiser -> noise gate -> leveler (compressor/AGC)
+      denoise: config.denoise !== false,
+      gate: config.gate !== false,
+      gate_margin_db: Number(config.gate_margin_db ?? 10),
+      gate_db: config.gate_db === undefined || config.gate_db === null ? null : Number(config.gate_db),
+      gate_floor_db: Number(config.gate_floor_db ?? 24),
+      gate_hold_ms: Number(config.gate_hold_ms ?? 250),
+      leveler: config.leveler === true,
+      leveler_target_db: Number(config.leveler_target_db ?? -24),
+      leveler_max_gain_db: Number(config.leveler_max_gain_db ?? 15),
+      // browser processing of YOUR microphone
+      mic_echo_cancel: config.mic_echo_cancel !== false,
+      mic_noise_suppress: config.mic_noise_suppress !== false,
+      mic_auto_gain: config.mic_auto_gain !== false,
       show_header: config.show_header !== false,
       show_level: config.show_level !== false,
       show_timer: config.show_timer === true,
@@ -360,6 +617,7 @@ class ReselIntercomCard extends HTMLElement {
     this._unsubscribe();
     this._releaseMic();
     this._stopLevelTimer();
+    if (this._pb) this._pb.proc.reset(); // keep the RNNoise state, drop buffered audio
   }
 
   _stateObj(key) {
@@ -585,7 +843,13 @@ class ReselIntercomCard extends HTMLElement {
     analyser.fftSize = 1024;
     tail.connect(analyser);
     analyser.connect(ctx.destination);
-    this._pb = { head, analyser, buf: new Float32Array(analyser.fftSize) };
+    const proc = new LineProcessor(this._cfg);
+    if (this._cfg.denoise) {
+      loadRnnoise().then((mod) => {
+        if (mod && this._pb && this._pb.proc === proc) proc.setRnnoise(mod);
+      });
+    }
+    this._pb = { head, analyser, proc, buf: new Float32Array(analyser.fftSize) };
     return this._pb;
   }
 
@@ -608,9 +872,12 @@ class ReselIntercomCard extends HTMLElement {
     const n = bytes.length >> 1;
     if (!n) return;
     const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, n);
-    const buf = ctx.createBuffer(1, n, TARGET_RATE);
-    const ch = buf.getChannelData(0);
-    for (let i = 0; i < n; i++) ch[i] = pcm[i] / 32768;
+    let samples = new Float32Array(n);
+    for (let i = 0; i < n; i++) samples[i] = pcm[i] / 32768;
+    samples = pb.proc.process(samples); // denoise -> gate -> leveler (may return fewer samples while a frame fills)
+    if (!samples.length) return;
+    const buf = ctx.createBuffer(1, samples.length, TARGET_RATE);
+    buf.getChannelData(0).set(samples);
     const now = ctx.currentTime;
     if (this._nextTime < now + 0.02) this._nextTime = now + 0.12; // (re)start with a small jitter buffer
     if (this._nextTime > now + 0.8) return; // too far behind: drop to keep latency low
@@ -655,7 +922,12 @@ class ReselIntercomCard extends HTMLElement {
     if (!ctx) throw new Error("no AudioContext");
     if (ctx.state !== "running") await ctx.resume();
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: {
+        channelCount: 1,
+        echoCancellation: this._cfg.mic_echo_cancel,
+        noiseSuppression: this._cfg.mic_noise_suppress,
+        autoGainControl: this._cfg.mic_auto_gain,
+      },
     });
     const source = ctx.createMediaStreamSource(stream);
     const lp = ctx.createBiquadFilter(); // anti-alias before decimating to 16 kHz
@@ -782,6 +1054,7 @@ class ReselIntercomCard extends HTMLElement {
     this._streaming = false;
     this._frameLen = 0;
     this._nextTime = 0; // restart playback buffer when listening resumes
+    if (this._pb) this._pb.proc.reset();
   }
 
   // ---------------------------------------------------------------- level meter
@@ -855,5 +1128,8 @@ if (!window.customCards.some((c) => c.type === "resel-intercom-card")) {
     preview: false,
   });
 }
+
+// test hook (only used by the offline tests)
+if (window.__RESEL_TEST) window.__RESEL_TEST.LineProcessor = LineProcessor;
 
 })();
