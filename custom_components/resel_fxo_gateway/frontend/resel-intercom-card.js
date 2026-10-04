@@ -50,8 +50,8 @@ const DEFAULT_LABELS = {
 const DEFAULT_BUTTONS = [
   { name: "Open door", icon: "mdi:door-open", entity_key: "door_open" },
   { name: "Stair light", icon: "mdi:lightbulb-on-outline", entity_key: "stair_light" },
-  { name: "Call panel", icon: "mdi:phone-outgoing", entity_key: "call_panel" },
-  { name: "Answer & open", icon: "mdi:phone-check", entity_key: "answer_open" },
+  { name: "Call panel", icon: "mdi:phone-outgoing", entity_key: "call_panel", disabled_when: ["in_call"] },
+  { name: "Answer & open", icon: "mdi:phone-check", entity_key: "answer_open", disabled_when: ["in_call"] },
 ];
 
 // Object ids of the default ESPHome entities (after the prefix).
@@ -428,7 +428,10 @@ class ReselIntercomCard extends HTMLElement {
     for (const c of this._cbtns) {
       const id = c.cfg.entity;
       const s = id && this._hass ? this._hass.states[id] : null;
-      c.btn.disabled = !!id && !!this._hass && (!s || s.state === "unavailable");
+      const dw = c.cfg.disabled_when ? [].concat(c.cfg.disabled_when) : [];
+      // modes: idle, ringing, connecting, listening, talking, or "in_call" (= listening + talking)
+      const blocked = dw.includes(mode) || (inCall && dw.includes("in_call"));
+      c.btn.disabled = blocked || (!!id && !!this._hass && (!s || s.state === "unavailable"));
       if (!c.cfg.name && s) c.label.textContent = s.attributes.friendly_name || id;
     }
 
