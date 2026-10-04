@@ -129,7 +129,7 @@ All measured on the real line of the author's apartment.
 | Line noise floor (nobody speaking) | RMS about **−62 dBFS**, DC offset about 0 |
 | Content | dominated by **50 Hz mains hum** and its odd harmonics |
 | Band 300–3400 Hz | about **−72 dBFS** |
-| Fix | high-pass at 250 Hz in the card (`highpass_hz`, 24 dB/oct) |
+| Fix | notch comb on 50 Hz multiples + high-pass 300–350 Hz in the card (noise −63 → −83 dBFS) |
 | Card level meter | `−90 dBFS` means the clamp floor (microphone stopped), not measured noise |
 | Streaming chunk | 40 ms (640 samples) |
 | Playback jitter buffer in the card | about 120 ms, dropped if more than 800 ms behind |
@@ -186,6 +186,7 @@ gain: 2                   # playback gain for the line audio
 mic_gain: 1               # gain for your microphone
 highpass_hz: 250          # removes the 50 Hz hum (0 = off)
 lowpass_hz: 3400
+notch_hz: 50              # mains hum filter: notches on 50 Hz and its multiples (60 for 60 Hz grids, 0 = off)
 show_timer: false
 buttons:                  # shown 2 per row under the PTT button
   - name: Open door
@@ -208,6 +209,7 @@ buttons:                  # shown 2 per row under the PTT button
 Card options:
 
 - **Buttons:** each takes `name`, `icon`, `entity` (button, script, scene, switch, light… act sensibly by domain) or a `tap_action` (`perform-action`, `toggle`, `more-info`, `navigate`, `url`). Extra keys: `disabled_when` (list of `idle`, `ringing`, `connecting`, `listening`, `talking`, `in_call`), `state_icons`, `state_colors`.
+- **Hum filter:** the line noise is mostly 50 Hz and its harmonics. The card applies a comb of narrow notches (`notch_hz`, up to `notch_max_hz: 1500`, `notch_q: 30`), then the high-pass and low-pass. On a recording of the idle line this took the noise from −63 dBFS to −83 dBFS (high-pass/low-pass alone: −73 dBFS).
 - **Texts:** all UI texts are English and can be overridden with `labels:`.
 - **card-mod:** the root is `<ha-card>` and every part has a class (`.header`, `.status`, `.meter`, `.answer`, `.hangup`, `.ptt`, `.custom`). Custom buttons expose `data-state`, for example `.custom[data-state="on"] { … }`.
 - **Status strings:** the card expects the ESPHome text sensor to report `Inactiv`, `Suna`, `Conectare`, `In apel - ascult` and `In apel - vorbesc`.
