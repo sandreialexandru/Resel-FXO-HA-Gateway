@@ -213,6 +213,7 @@ class ReselIntercomCard extends HTMLElement {
       mic_gain: Number(config.mic_gain ?? 1),
       show_header: config.show_header !== false,
       show_level: config.show_level !== false,
+      show_timer: config.show_timer === true,
     };
     this._build();
     if (this._hass) this._update();
@@ -791,7 +792,7 @@ class ReselIntercomCard extends HTMLElement {
     this._drawBars();
     e.lvlName.textContent = name;
     e.lvlVal.textContent = db <= -90 ? "—" : `${Math.round(db)} dBFS`;
-    if (talking && this._streaming && this._cfg.ptt_timeout > 0) {
+    if (this._cfg.show_timer && talking && this._streaming && this._cfg.ptt_timeout > 0) {
       const sec = Math.floor((Date.now() - this._talkStart) / 1000);
       const fmt = (x) => `${Math.floor(x / 60)}:${String(x % 60).padStart(2, "0")}`;
       e.timer.textContent = `${fmt(sec)} / ${fmt(this._cfg.ptt_timeout)}`;
