@@ -1,0 +1,13 @@
+{
+  "domain": "resel_fxo_gateway",
+  "name": "Resel FXO HA Gateway",
+  "codeowners": ["@sandreialexandru"],
+  "config_flow": true,
+  "dependencies": ["http", "frontend", "websocket_api"],
+  "documentation": "https://github.com/sandreialexandru/Resel-FXO-HA-Gateway",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/sandreialexandru/Resel-FXO-HA-Gateway/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
