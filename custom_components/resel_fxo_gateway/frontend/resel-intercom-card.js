@@ -331,7 +331,7 @@ class ReselIntercomCard extends HTMLElement {
       btn.append(ic, sp);
       btn.addEventListener("click", () => this._runAction(b));
       e.grid.appendChild(btn);
-      return { cfg: b, btn, label: sp };
+      return { cfg: b, btn, label: sp, icon: ic };
     });
     this._built = true;
   }
@@ -439,6 +439,14 @@ class ReselIntercomCard extends HTMLElement {
       // modes: idle, ringing, connecting, listening, talking, or "in_call" (= listening + talking)
       const blocked = dw.includes(mode) || (inCall && dw.includes("in_call"));
       c.btn.disabled = blocked || (!!id && !!this._hass && (!s || s.state === "unavailable"));
+      const st = s ? s.state : "unavailable";
+      c.btn.dataset.state = st; // card-mod hook: .custom[data-state="on"] { ... }
+      const si = c.cfg.state_icons;
+      const icon = (si && si[st]) || c.cfg.icon;
+      if (icon && c.icon.getAttribute("icon") !== icon) c.icon.setAttribute("icon", icon);
+      const col = c.cfg.state_colors && c.cfg.state_colors[st];
+      c.btn.style.color = col || "";
+      if (col) c.btn.style.borderColor = col; else c.btn.style.borderColor = "";
       if (!c.cfg.name && s) c.label.textContent = s.attributes.friendly_name || id;
     }
 
