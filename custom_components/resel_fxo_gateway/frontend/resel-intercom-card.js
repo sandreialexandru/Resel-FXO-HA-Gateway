@@ -13,7 +13,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.3.0";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -218,6 +218,9 @@ class ReselIntercomCard extends HTMLElement {
       ptt_timeout: Number(config.ptt_timeout ?? 30),
       highpass_hz: Number(config.highpass_hz ?? 250),
       lowpass_hz: Number(config.lowpass_hz ?? 3400),
+      notch_hz: Number(config.notch_hz ?? 50),
+      notch_max_hz: Number(config.notch_max_hz ?? 1500),
+      notch_q: Number(config.notch_q ?? 30),
       gain: Number(config.gain ?? 2),
       mic_gain: Number(config.mic_gain ?? 1),
       show_header: config.show_header !== false,
@@ -541,34 +544,43 @@ class ReselIntercomCard extends HTMLElement {
     if (ctx && ctx.state !== "running") ctx.resume().then(() => this._update()).catch(() => {});
   }
 
+  // Filter chain for the line audio: gain -> mains-hum notch comb -> high-pass -> low-pass.
+  // Static so it can be reused (and tested) with any AudioContext, including an OfflineAudioContext.
+  static _buildLineChain(ctx, cfg) {
+    const mk = (type, f, q) => {
+      const n = ctx.createBiquadFilter();
+      n.type = type;
+      n.frequency.value = f;
+      n.Q.value = q;
+      return n;
+    };
+    const head = ctx.createGain();
+    head.gain.value = cfg.gain;
+    let tail = head;
+    const add = (n) => {
+      tail.connect(n);
+      tail = n;
+    };
+    if (cfg.notch_hz > 0) {
+      // the line hum is mains (50/60 Hz) and its harmonics: narrow notches on every multiple
+      for (let f = cfg.notch_hz; f <= cfg.notch_max_hz && f < TARGET_RATE / 2; f += cfg.notch_hz) {
+        add(mk("notch", f, cfg.notch_q));
+      }
+    }
+    if (cfg.highpass_hz > 0) {
+      // two cascaded 2nd-order stages: 24 dB/oct
+      add(mk("highpass", cfg.highpass_hz, 0.707));
+      add(mk("highpass", cfg.highpass_hz, 0.707));
+    }
+    if (cfg.lowpass_hz > 0) add(mk("lowpass", cfg.lowpass_hz, 0.707));
+    return { head, tail };
+  }
+
   _ensurePlayback() {
     if (this._pb) return this._pb;
     const ctx = this._ensureCtx();
     if (!ctx) return null;
-    const mk = (type, f) => {
-      const n = ctx.createBiquadFilter();
-      n.type = type;
-      n.frequency.value = f;
-      n.Q.value = 0.707;
-      return n;
-    };
-    const head = ctx.createGain();
-    head.gain.value = this._cfg.gain;
-    let tail = head;
-    const hp = this._cfg.highpass_hz;
-    if (hp > 0) {
-      // two cascaded 2nd-order stages: 24 dB/oct, removes the 50 Hz mains hum on the line
-      const a = mk("highpass", hp);
-      const b = mk("highpass", hp);
-      tail.connect(a);
-      a.connect(b);
-      tail = b;
-    }
-    if (this._cfg.lowpass_hz > 0) {
-      const lp = mk("lowpass", this._cfg.lowpass_hz);
-      tail.connect(lp);
-      tail = lp;
-    }
+    const { head, tail } = ReselIntercomCard._buildLineChain(ctx, this._cfg);
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     tail.connect(analyser);
