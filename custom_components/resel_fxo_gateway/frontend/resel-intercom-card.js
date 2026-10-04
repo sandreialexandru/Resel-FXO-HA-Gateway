@@ -10,6 +10,8 @@
  * under `entities:`.
  */
 
+(() => {
+"use strict";
 const DOMAIN = "resel_fxo_gateway";
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -820,3 +822,5 @@ if (!window.customCards.some((c) => c.type === "resel-intercom-card")) {
     preview: false,
   });
 }
+
+})();
