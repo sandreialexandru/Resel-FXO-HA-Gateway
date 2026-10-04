@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import logging
 from pathlib import Path
 
@@ -38,7 +39,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     await hass.http.async_register_static_paths(
         [StaticPathConfig(CARD_URL_BASE, str(frontend_dir), cache_headers=False)]
     )
-    add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_FILENAME}")
+    # the version in the URL makes browsers fetch the new card after every release
+    version = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
+    add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_FILENAME}?v={version}")
     websocket_api.async_register_command(hass, ws_subscribe_audio)
     websocket_api.async_register_command(hass, ws_send_audio)
     return True
