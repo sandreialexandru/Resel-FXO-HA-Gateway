@@ -110,7 +110,15 @@ ha-card { padding: 16px; box-sizing: border-box; }
   font: inherit; font-weight: 500; font-size: 15px; height: 48px; padding: 0 12px; cursor: pointer;
   -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
 }
-.btn:disabled { opacity: .45; cursor: default; }
+.btn:disabled {
+  cursor: default; opacity: .7; border-style: dashed;
+  background: var(--secondary-background-color, rgba(127,127,127,.12));
+  color: var(--disabled-text-color, #8a8a8a); border-color: var(--divider-color, #888);
+}
+.custom:not(:disabled) {
+  color: var(--primary-color, #03a9f4); border-color: var(--primary-color, #03a9f4);
+  background: color-mix(in srgb, var(--primary-color, #03a9f4) 12%, transparent);
+}
 .btn ha-icon { --mdc-icon-size: 20px; flex: none; }
 .btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .answer, .hangup { height: 52px; font-size: 16px; }
@@ -122,7 +130,6 @@ ha-card { padding: 16px; box-sizing: border-box; }
 }
 .ptt ha-icon { --mdc-icon-size: 26px; }
 .ptt .timer { font-size: 13px; font-weight: 500; opacity: .9; }
-.ptt:disabled { border-style: dashed; background: transparent; }
 .ptt.ready { border-color: var(--success-color, #43a047); }
 .ptt.ready ha-icon { color: var(--success-color, #43a047); }
 .ptt.active { background: var(--error-color, #db4437); border-color: transparent; color: #fff; font-weight: 600; }
