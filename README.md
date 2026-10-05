@@ -1,3 +1,5 @@
+<img src="custom_components/resel_fxo_gateway/brand/icon.png" alt="Resel FXO HA Gateway icon" width="96" align="right">
+
 # Resel FXO HA Gateway
 
 Answer your building intercom from Home Assistant: detect the ring, pick up, talk, and open the door, from the phone or a wall tablet.
@@ -166,6 +168,7 @@ Needs ESP-IDF and a recent ESPHome (developed on 2026.9).
 2. Download **Resel FXO HA Gateway** and restart Home Assistant.
 3. Settings → Devices & services → **Add integration** → *Resel FXO HA Gateway*: host of the ESP32, port `6054`, token.
 4. The card file is registered automatically. Hard refresh the browser after an update.
+5. The integration's icon comes from its own `brand/` folder (Home Assistant 2026.3 or newer; older versions show the generic placeholder).
 
 Manual install: copy `custom_components/resel_fxo_gateway` to `/config/custom_components/`.
 
