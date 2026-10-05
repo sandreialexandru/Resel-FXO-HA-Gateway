@@ -8,12 +8,16 @@
  * (.header .status .meter .btn .answer .hangup .ptt .custom-grid .custom ...).
  * Entity ids below are defaults built from `entity_prefix`; override any of them
  * under `entities:`.
+ *
+ * Audio and push-to-talk settings come from the integration options (Settings -> Devices & services ->
+ * Resel FXO HA Gateway -> Configure) and are pushed live to the card. A value set in the card YAML
+ * overrides the integration's value for this card only.
  */
 
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.4.1";
+const CARD_VERSION = "0.5.0";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -54,6 +58,48 @@ const DEFAULT_BUTTONS = [
   { name: "Call panel", icon: "mdi:phone-outgoing", entity_key: "call_panel", disabled_when: ["in_call"] },
   { name: "Answer & open", icon: "mdi:phone-check", entity_key: "answer_open", disabled_when: ["in_call"] },
 ];
+
+// Audio / PTT settings: integration options, overridable per card in YAML. Defaults match const.py.
+const SETTING_DEFAULTS = {
+  ptt_mode: "hold",
+  ptt_timeout: 30,
+  mic_gain: 1,
+  mic_echo_cancel: true,
+  mic_noise_suppress: true,
+  mic_auto_gain: true,
+  gain: 2,
+  highpass_hz: 250,
+  lowpass_hz: 3400,
+  notch_hz: 50,
+  notch_max_hz: 1500,
+  notch_q: 30,
+  denoise: true,
+  gate: true,
+  gate_margin_db: 10,
+  gate_db: null, // null = automatic threshold
+  gate_floor_db: 24,
+  gate_hold_ms: 250,
+  leveler: false,
+  leveler_target_db: -24,
+  leveler_max_gain_db: 15,
+};
+
+// card YAML (if the key is set) > integration options > defaults
+function resolveSettings(config, server) {
+  const out = {};
+  for (const [k, def] of Object.entries(SETTING_DEFAULTS)) {
+    let v = config[k] !== undefined ? config[k] : server && server[k] !== undefined ? server[k] : def;
+    if (k === "ptt_mode") v = v === "toggle" ? "toggle" : "hold";
+    else if (k === "gate_db") v = v === undefined || v === null || v === "" || Number.isNaN(Number(v)) ? null : Number(v);
+    else if (typeof def === "boolean") v = v === true || v === "true";
+    else {
+      v = Number(v);
+      if (Number.isNaN(v)) v = def;
+    }
+    out[k] = v;
+  }
+  return out;
+}
 
 // Object ids of the default ESPHome entities (after the prefix).
 const DEFAULT_ENTITY_SUFFIX = {
@@ -103,6 +149,8 @@ ha-card { padding: 16px; box-sizing: border-box; }
 .meter .note { font-size: 13px; color: var(--secondary-text-color); }
 .meter .sound { align-self: flex-start; }
 .pair, .custom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+/* odd number of custom buttons: the last one takes the whole row */
+.custom-grid > .custom:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .btn {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   border: 1px solid var(--divider-color, #888); border-radius: 14px;
@@ -430,6 +478,10 @@ class ReselIntercomCard extends HTMLElement {
     this._frame = new Int16Array(FRAME_SAMPLES);
     this._frameLen = 0;
     this._resPos = 0;
+    // settings pushed by the integration (null until received / when the integration is missing)
+    this._serverSettings = null;
+    this._settingsUnsub = null;
+    this._settingsSubscribing = false;
   }
 
   // ---------------------------------------------------------------- config
@@ -450,38 +502,19 @@ class ReselIntercomCard extends HTMLElement {
       if (!nb.entity && nb.entity_key) nb.entity = entities[nb.entity_key];
       return nb;
     });
-    this._cfg = {
-      title: config.title ?? labels.title,
-      entities,
-      labels,
-      buttons,
-      ptt_mode: config.ptt_mode === "toggle" ? "toggle" : "hold",
-      ptt_timeout: Number(config.ptt_timeout ?? 30),
-      highpass_hz: Number(config.highpass_hz ?? 250),
-      lowpass_hz: Number(config.lowpass_hz ?? 3400),
-      notch_hz: Number(config.notch_hz ?? 50),
-      notch_max_hz: Number(config.notch_max_hz ?? 1500),
-      notch_q: Number(config.notch_q ?? 30),
-      gain: Number(config.gain ?? 2),
-      mic_gain: Number(config.mic_gain ?? 1),
-      // line audio cleaning (see README): RNNoise denoiser -> noise gate -> leveler (compressor/AGC)
-      denoise: config.denoise !== false,
-      gate: config.gate !== false,
-      gate_margin_db: Number(config.gate_margin_db ?? 10),
-      gate_db: config.gate_db === undefined || config.gate_db === null ? null : Number(config.gate_db),
-      gate_floor_db: Number(config.gate_floor_db ?? 24),
-      gate_hold_ms: Number(config.gate_hold_ms ?? 250),
-      leveler: config.leveler === true,
-      leveler_target_db: Number(config.leveler_target_db ?? -24),
-      leveler_max_gain_db: Number(config.leveler_max_gain_db ?? 15),
-      // browser processing of YOUR microphone
-      mic_echo_cancel: config.mic_echo_cancel !== false,
-      mic_noise_suppress: config.mic_noise_suppress !== false,
-      mic_auto_gain: config.mic_auto_gain !== false,
-      show_header: config.show_header !== false,
-      show_level: config.show_level !== false,
-      show_timer: config.show_timer === true,
-    };
+    this._config = config;
+    this._cfg = Object.assign(
+      {
+        title: config.title ?? labels.title,
+        entities,
+        labels,
+        buttons,
+        show_header: config.show_header !== false,
+        show_level: config.show_level !== false,
+        show_timer: config.show_timer === true,
+      },
+      resolveSettings(config, this._serverSettings)
+    );
     this._build();
     if (this._hass) this._update();
   }
@@ -599,6 +632,7 @@ class ReselIntercomCard extends HTMLElement {
   // ---------------------------------------------------------------- hass
   set hass(hass) {
     this._hass = hass;
+    if (this.isConnected) this._subscribeSettings();
     if (this._built) this._update();
   }
 
@@ -607,15 +641,64 @@ class ReselIntercomCard extends HTMLElement {
   }
 
   connectedCallback() {
+    if (this._hass) this._subscribeSettings();
     if (this._hass && this._built) this._update();
   }
 
   disconnectedCallback() {
+    this._unsubscribeSettings();
     this._talkEnd();
     this._unsubscribe();
     this._releaseMic();
     this._stopLevelTimer();
     if (this._pb) this._pb.proc.reset(); // keep the RNNoise state, drop buffered audio
+  }
+
+  // ---------------------------------------------------------------- settings from the integration
+  async _subscribeSettings() {
+    if (this._settingsUnsub || this._settingsSubscribing || !this._hass || !this._hass.connection) return;
+    this._settingsSubscribing = true;
+    try {
+      const unsub = await this._hass.connection.subscribeMessage((m) => this._onSettings(m && m.settings), {
+        type: `${DOMAIN}/subscribe_settings`,
+      });
+      if (this.isConnected) this._settingsUnsub = unsub;
+      else unsub();
+    } catch (err) {
+      // integration not set up (or an older version): keep the card YAML values and defaults
+      console.warn("resel-intercom-card: no settings from the integration, using card YAML / defaults", err);
+    } finally {
+      this._settingsSubscribing = false;
+    }
+  }
+
+  _unsubscribeSettings() {
+    if (this._settingsUnsub) {
+      const u = this._settingsUnsub;
+      this._settingsUnsub = null;
+      try { u(); } catch (_) { /* ignore */ }
+    }
+  }
+
+  _onSettings(settings) {
+    if (!settings || !this._cfg) return;
+    this._serverSettings = settings;
+    const next = resolveSettings(this._config || {}, settings);
+    const changed = Object.keys(next).some((k) => next[k] !== this._cfg[k]);
+    if (!changed) return;
+    Object.assign(this._cfg, next);
+    // line chain: rebuilt from the new values on the next audio frame (already scheduled audio plays out)
+    if (this._pb) {
+      this._pb.proc.destroy();
+      try { this._pb.analyser.disconnect(); } catch (_) { /* ignore */ }
+      this._pb = null;
+    }
+    // microphone: gain applies at once; the browser processing flags on the next push-to-talk
+    if (this._mic) {
+      this._mic.gain.gain.value = this._cfg.mic_gain;
+      if (!this._streaming && !this._talkRequested) this._releaseMic();
+    }
+    if (this._built) this._update();
   }
 
   _stateObj(key) {

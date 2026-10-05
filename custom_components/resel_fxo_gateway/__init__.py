@@ -14,9 +14,11 @@ from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.typing import ConfigType
 
 from .bridge import AudioBridge, Listener
+from .config_flow import card_settings
 from .const import (
     CARD_FILENAME,
     CARD_URL_BASE,
@@ -25,6 +27,7 @@ from .const import (
     CONF_TOKEN,
     DOMAIN,
     SAMPLE_RATE,
+    SIGNAL_SETTINGS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,13 +50,20 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_FILENAME}?v={version}")
     websocket_api.async_register_command(hass, ws_subscribe_audio)
     websocket_api.async_register_command(hass, ws_send_audio)
+    websocket_api.async_register_command(hass, ws_subscribe_settings)
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     bridge = AudioBridge(entry.data[CONF_HOST], entry.data[CONF_PORT], entry.data.get(CONF_TOKEN, ""))
     hass.data[DOMAIN][entry.entry_id] = bridge
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Options changed: push the new card settings to every open card (no reload, the call keeps going)."""
+    async_dispatcher_send(hass, f"{SIGNAL_SETTINGS}_{entry.entry_id}", card_settings(dict(entry.options)))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -65,6 +75,33 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _get_bridge(hass: HomeAssistant) -> AudioBridge | None:
     bridges = hass.data.get(DOMAIN, {})
     return next(iter(bridges.values()), None) if bridges else None
+
+
+def _get_entry(hass: HomeAssistant) -> ConfigEntry | None:
+    """The config entry whose bridge the card uses (the first loaded one)."""
+    entry_ids = list(hass.data.get(DOMAIN, {}))
+    return hass.config_entries.async_get_entry(entry_ids[0]) if entry_ids else None
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/subscribe_settings"})
+@callback
+def ws_subscribe_settings(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Card audio settings from the integration options. Sent once, then again on every change."""
+    entry = _get_entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_configured", "Resel FXO gateway is not configured")
+        return
+    msg_id = msg["id"]
+
+    @callback
+    def on_change(settings: dict) -> None:
+        connection.send_message(websocket_api.event_message(msg_id, {"settings": settings}))
+
+    connection.subscriptions[msg_id] = async_dispatcher_connect(
+        hass, f"{SIGNAL_SETTINGS}_{entry.entry_id}", on_change
+    )
+    connection.send_result(msg_id)
+    on_change(card_settings(dict(entry.options)))
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/subscribe_audio"})

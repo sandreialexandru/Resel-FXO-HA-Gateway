@@ -47,7 +47,7 @@ Plain TCP, one client at a time (a newer client replaces the old one):
 2. ESP32 → client: raw PCM, 16 kHz, 16-bit, mono, only while the line is being listened to.
 3. Client → ESP32: raw PCM for the speaker, accepted only while PTT is on.
 
-The Home Assistant side keeps **one** connection to the ESP32 and fans it out to every open card, so a phone and a wall tablet can watch the same call. The connection is opened only while at least one card is in a call. Websocket commands (`resel_fxo_gateway/subscribe_audio`, `resel_fxo_gateway/send_audio`) are admin-only.
+The Home Assistant side keeps **one** connection to the ESP32 and fans it out to every open card, so a phone and a wall tablet can watch the same call. The connection is opened only while at least one card is in a call. Websocket commands (`resel_fxo_gateway/subscribe_audio`, `resel_fxo_gateway/send_audio`) are admin-only. A third one, `resel_fxo_gateway/subscribe_settings`, sends the card its audio settings from the integration options and again whenever they change.
 
 ---
 
@@ -117,7 +117,8 @@ All measured on the real line of the author's apartment.
 | Item | Value |
 |---|---|
 | Pulse | 60 ms break + 40 ms make (10 pulses/s), 800 ms between digits, `0` = 10 pulses |
-| DTMF | 400 ms tone + 150 ms gap per key, amplitude 28000/32767 |
+| DTMF | one continuous tone per key, **450 ms** (works on the real line), amplitude 28000/32767. The tone length is selectable in the firmware and is the same for every DTMF key sent |
+| Pulse / DTMF | one switch in the firmware picks the mode for every key sent; `#0` (call the panel) is always DTMF |
 | Wait after off-hook before dialing | 1.5 s |
 | Door command cooldown | 10 s |
 
@@ -181,14 +182,8 @@ entities:
   hangup: button.resel_fxo_gateway_interfon_inchide
   ptt: switch.resel_fxo_gateway_interfon_ptt
   level: sensor.resel_fxo_gateway_interfon_nivel_microfon_rms
-ptt_mode: hold            # hold | toggle
-gain: 2                   # playback gain for the line audio
-mic_gain: 1               # gain for your microphone
-highpass_hz: 250          # removes the 50 Hz hum (0 = off)
-lowpass_hz: 3400
-notch_hz: 50              # mains hum filter: notches on 50 Hz and its multiples (60 for 60 Hz grids, 0 = off)
 show_timer: false
-buttons:                  # shown 2 per row under the PTT button
+buttons:                  # 2 per row under the PTT button; with an odd count the last one is full width
   - name: Open door
     icon: mdi:door-open
     entity: button.resel_fxo_gateway_interfon_deschide_usa
@@ -203,9 +198,8 @@ buttons:                  # shown 2 per row under the PTT button
     state_colors: { "on": red }
 ```
 
-Card options (everything except `entities`/`buttons` is optional; the value shown is the default):
+Card options (all optional; the value shown is the default). The audio and push-to-talk settings are not set here but in the integration, see [4. Audio settings](#4-audio-settings).
 
-**General**
 
 | Option | Default | What it does |
 |---|---|---|
@@ -217,20 +211,45 @@ Card options (everything except `entities`/`buttons` is optional; the value show
 | `show_timer` | `false` | While talking, show the elapsed time against `ptt_timeout`. |
 | `labels` | English | Override any UI text (for translation). |
 
+**Buttons**
+
+`buttons` is a list shown two per row under the talk button. With an odd number of buttons the last one takes the whole row (for example 3 buttons: two side by side, the third full width). Without the list you get *Open door*, *Call panel* and *Answer & open*. Each button takes:
+
+| Key | What it does |
+|---|---|
+| `name`, `icon` | Label and `mdi:` icon. |
+| `entity` | Any button, script, scene, switch or light; the card acts sensibly by domain. |
+| `tap_action` | Instead of `entity`: `perform-action`, `toggle`, `more-info`, `navigate` or `url`. |
+| `disabled_when` | List of states in which the button is greyed out: `idle`, `ringing`, `connecting`, `listening`, `talking`, `in_call`. |
+| `state_icons`, `state_colors` | Per-state icon and color, for example for a mute switch. |
+
+**Other**
+
+- **card-mod:** the root is `<ha-card>` and every part has a class (`.header`, `.status`, `.meter`, `.answer`, `.hangup`, `.ptt`, `.custom`). Custom buttons expose `data-state`, for example `.custom[data-state="on"] { … }`.
+- **Status strings:** the card expects the ESPHome text sensor to report `Inactiv`, `Suna`, `Conectare`, `In apel - ascult` and `In apel - vorbesc`.
+
+**Troubleshooting: "Custom element doesn't exist: resel-intercom-card".** The integration loads the card by itself, so no Lovelace resource is needed. If you added one by hand earlier, delete it (Settings → Dashboards → Resources), otherwise the card is loaded twice, possibly in an old version. The card file is cached by the browser/companion app (its URL carries the version), so after the first download it is available at once, even when the app restarts on another network. If the error still shows up after switching networks, the script request itself failed: in the companion app use Settings → Companion app → Troubleshooting → *Reload frontend* (or clear the frontend cache).
+
+### 4. Audio settings
+
+The audio and push-to-talk settings live in the integration, so they are changed from the Home Assistant UI instead of the card YAML: **Settings → Devices & services → Resel FXO HA Gateway → Configure**. The form has three groups (Talking, Line audio: filters, Line audio: cleaning). Saving pushes the new values to every open card at once, also during a call: the line filters are rebuilt on the next audio frame, the microphone gain changes immediately and the browser microphone options apply from the next push-to-talk. Clearing a box returns it to its default.
+
+Any of these keys can still be written in a card's YAML; there it overrides the integration's value for that card only (for example a higher `gain` on a wall tablet with a quiet speaker).
+
 **Talking (push-to-talk)**
 
-| Option | Default | What it does |
+| Setting | Default | What it does |
 |---|---|---|
 | `ptt_mode` | `hold` | `hold`: talk while the button is pressed. `toggle`: tap to start, tap to stop. |
 | `ptt_timeout` | `30` | Only used by `show_timer`: the maximum talk time shown next to the elapsed time (the card does not cut the call itself). |
 | `mic_gain` | `1` | Gain applied to your microphone before it is sent to the line. |
 | `mic_echo_cancel` | `true` | Browser echo cancellation on your microphone. |
 | `mic_noise_suppress` | `true` | Browser noise suppression on your microphone. |
-| `mic_auto_gain` | `true` | Browser automatic gain control on your microphone. Turn the three `mic_*` flags off if your voice sounds pumped or too quiet. |
+| `mic_auto_gain` | `true` | Browser automatic gain control on your microphone. Turn these three off if your voice sounds pumped or too quiet. |
 
 **Line audio: filters** (what you hear from the line)
 
-| Option | Default | What it does |
+| Setting | Default | What it does |
 |---|---|---|
 | `gain` | `2` | Playback gain. Lower it when you enable the leveler, which adds gain of its own. |
 | `highpass_hz` | `250` | High-pass cutoff, removes low-frequency rumble (0 = off). |
@@ -241,40 +260,21 @@ Card options (everything except `entities`/`buttons` is optional; the value show
 
 **Line audio: cleaning** (processing order: denoise → gate → leveler → filters)
 
-| Option | Default | What it does |
+| Setting | Default | What it does |
 |---|---|---|
 | `denoise` | `true` | RNNoise neural noise suppression (see below). Falls back silently to the plain filters if it cannot load. |
 | `gate` | `true` | Noise gate: mutes the line between words. It follows the noise floor of the line by itself. |
 | `gate_margin_db` | `10` | How far above the measured noise floor the signal must rise to open the gate. Raise it if noise leaks through, lower it if word beginnings get cut. |
-| `gate_db` | unset | Fixed opening threshold in dBFS (for example `-50`) instead of the automatic one. |
+| `gate_db` | empty | Fixed opening threshold in dBFS (for example `-50`) instead of the automatic one. |
 | `gate_floor_db` | `24` | How much the closed gate attenuates, in dB. A higher value is quieter but more abrupt; a lower one leaves some background. |
 | `gate_hold_ms` | `250` | How long the gate stays open after the voice stops, so word endings are not clipped. |
 | `leveler` | `false` | Slow automatic gain that brings quiet voices up to a constant level, followed by a soft limiter. |
 | `leveler_target_db` | `-24` | Target voice level in dBFS. |
 | `leveler_max_gain_db` | `15` | Largest boost the leveler may apply. |
 
-**Buttons**
-
-`buttons` is a list shown two per row under the talk button. Without it you get *Open door*, *Call panel* and *Answer & open*. Each button takes:
-
-| Key | What it does |
-|---|---|
-| `name`, `icon` | Label and `mdi:` icon. |
-| `entity` | Any button, script, scene, switch or light; the card acts sensibly by domain. |
-| `tap_action` | Instead of `entity`: `perform-action`, `toggle`, `more-info`, `navigate` or `url`. |
-| `disabled_when` | List of states in which the button is greyed out: `idle`, `ringing`, `connecting`, `listening`, `talking`, `in_call`. |
-| `state_icons`, `state_colors` | Per-state icon and color, for example for a mute switch. |
-
 **About the cleaning chain.** RNNoise ([Xiph](https://jmvalin.ca/demo/rnnoise/), BSD licence, WebAssembly build from `@jitsi/rnnoise-wasm`, credits in `frontend/rnnoise/NOTICE.md`) is a small neural noise suppressor, about 125 KB, loaded only when a call starts. The card resamples the 16 kHz line audio to 48 kHz and back, which adds about 20 ms. On a synthetic test the pauses between words dropped from −74 to −101 dBFS with the speech preserved. Start with the defaults; if the voice is quiet, enable `leveler` and keep `gain` around 4–6.
 
 **Hum filter.** The line noise is mostly 50 Hz and its harmonics. On a recording of the idle line the notch comb took the noise from −63 dBFS to −83 dBFS (high-pass/low-pass alone: −73 dBFS).
-
-**Other**
-
-- **card-mod:** the root is `<ha-card>` and every part has a class (`.header`, `.status`, `.meter`, `.answer`, `.hangup`, `.ptt`, `.custom`). Custom buttons expose `data-state`, for example `.custom[data-state="on"] { … }`.
-- **Status strings:** the card expects the ESPHome text sensor to report `Inactiv`, `Suna`, `Conectare`, `In apel - ascult` and `In apel - vorbesc`.
-
-**Troubleshooting: "Custom element doesn't exist: resel-intercom-card".** The integration loads the card by itself, so no Lovelace resource is needed. If you added one by hand earlier, delete it (Settings → Dashboards → Resources), otherwise the card is loaded twice, possibly in an old version. The card file is cached by the browser/companion app (its URL carries the version), so after the first download it is available at once, even when the app restarts on another network. If the error still shows up after switching networks, the script request itself failed: in the companion app use Settings → Companion app → Troubleshooting → *Reload frontend* (or clear the frontend cache).
 
 ---
 
@@ -285,14 +285,15 @@ Card options (everything except `entities`/`buttons` is optional; the value show
 - Ring detection (digital and optional ADC), including the 6 s hold and the post-hook lockout
 - Off-hook, hang-up, 1-minute watchdog
 - Pulse dialing: door opens with `0`, other numbers can be dialed
-- DTMF dialing for the building panel (`#0`)
+- DTMF dialing with a 450 ms tone, including `#0` for the building panel
 - Continuous real-time audio from the intercom to the ESP32 and over TCP to a client
 - Token handshake, PTT switch, microphone/speaker hand-over in the ESP32 logs
 
 **Verified in a test environment only**
 
 - The bridge against a simulated ESP32 (token ok / wrong token / no server, odd-length reads)
-- The card in a headless browser with a simulated Home Assistant (states, PTT streaming, buttons, `disabled_when`, `state_icons`)
+- The card in a headless browser with a simulated Home Assistant (states, PTT streaming, buttons, `disabled_when`, `state_icons`, settings pushed from the integration, odd button full width)
+- The options form and the live settings push in a Home Assistant test instance
 
 **Not yet verified**
 
@@ -305,7 +306,7 @@ Card options (everything except `entities`/`buttons` is optional; the value show
 
 - Half duplex only (push-to-talk), single ESP32 client at a time
 - Latency and quality are those of a 16 kHz PCM stream over websocket, with no echo cancellation on the line side
-- No visual card editor (YAML only)
+- No visual card editor (card layout in YAML; audio settings in the integration options)
 - Tested on classic ESP32 + WM8960; other codecs would need their own init and gain tuning
 
 ---
