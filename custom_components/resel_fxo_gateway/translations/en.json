@@ -23,5 +23,87 @@
     "abort": {
       "already_configured": "This gateway is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Intercom card audio settings",
+        "description": "Used by every Resel intercom card. Changes reach open cards immediately; a value set in a card's YAML still overrides the one here for that card. Leave a box empty to go back to its default.",
+        "sections": {
+          "talk": {
+            "name": "Talking (push-to-talk and your microphone)",
+            "data": {
+              "ptt_mode": "Push-to-talk mode",
+              "ptt_timeout": "Talk time shown by the timer",
+              "mic_gain": "Microphone gain",
+              "mic_echo_cancel": "Echo cancellation",
+              "mic_noise_suppress": "Noise suppression",
+              "mic_auto_gain": "Automatic gain control"
+            },
+            "data_description": {
+              "ptt_mode": "Hold: talk while the button is pressed. Toggle: tap to start, tap to stop.",
+              "ptt_timeout": "Only used by the card's show_timer option; the ESP32 has its own 30 s PTT limit.",
+              "mic_gain": "Gain applied to your microphone before it is sent to the line (1 = unchanged).",
+              "mic_echo_cancel": "Browser echo cancellation on your microphone.",
+              "mic_noise_suppress": "Browser noise suppression on your microphone.",
+              "mic_auto_gain": "Browser automatic gain control. Turn the three browser options off if your voice sounds pumped or too quiet."
+            }
+          },
+          "line_filters": {
+            "name": "Line audio: filters",
+            "data": {
+              "gain": "Playback gain",
+              "highpass_hz": "High-pass cutoff",
+              "lowpass_hz": "Low-pass cutoff",
+              "notch_hz": "Mains hum frequency",
+              "notch_max_hz": "Highest hum harmonic",
+              "notch_q": "Notch sharpness (Q)"
+            },
+            "data_description": {
+              "gain": "Gain of what you hear from the line. Lower it when the leveler is on.",
+              "highpass_hz": "Removes low-frequency rumble (0 = off).",
+              "lowpass_hz": "Removes hiss above the voice band (0 = off).",
+              "notch_hz": "Narrow notches on this frequency and its multiples: 50 for 50 Hz grids, 60 for 60 Hz, 0 = off.",
+              "notch_max_hz": "Highest harmonic that gets a notch.",
+              "notch_q": "Higher means narrower notches."
+            }
+          },
+          "line_cleaning": {
+            "name": "Line audio: cleaning",
+            "description": "Processing order: denoise, noise gate, leveler, then the filters.",
+            "data": {
+              "denoise": "Neural noise suppression (RNNoise)",
+              "gate": "Noise gate",
+              "gate_margin_db": "Gate margin above the noise floor",
+              "gate_db": "Fixed gate threshold",
+              "gate_floor_db": "Closed gate attenuation",
+              "gate_hold_ms": "Gate hold time",
+              "leveler": "Leveler (automatic voice level)",
+              "leveler_target_db": "Leveler target level",
+              "leveler_max_gain_db": "Leveler maximum boost"
+            },
+            "data_description": {
+              "denoise": "Falls back to the plain filters if it cannot load.",
+              "gate": "Mutes the line between words; follows the line noise floor by itself.",
+              "gate_margin_db": "Raise it if noise leaks through, lower it if word beginnings get cut.",
+              "gate_db": "Leave empty for the automatic threshold, or set e.g. -50 to use a fixed one.",
+              "gate_floor_db": "Higher is quieter but more abrupt.",
+              "gate_hold_ms": "How long the gate stays open after the voice stops.",
+              "leveler": "Brings quiet voices up to a constant level, with a soft limiter.",
+              "leveler_target_db": "Target voice level.",
+              "leveler_max_gain_db": "Largest boost the leveler may apply."
+            }
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "ptt_mode": {
+      "options": {
+        "hold": "Hold to talk",
+        "toggle": "Tap to start / tap to stop"
+      }
+    }
   }
 }
