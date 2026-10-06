@@ -17,7 +17,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.6.1";
+const CARD_VERSION = "0.6.2";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -152,6 +152,7 @@ ha-card { padding: 16px; box-sizing: border-box; }
 /* odd number of custom buttons: the last one takes the whole row */
 .custom-grid > .custom:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .dial { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+.dial[hidden] { display: none; }
 .dial input {
   min-width: 0; height: 48px; box-sizing: border-box; padding: 0 14px; font: inherit; font-size: 16px; letter-spacing: 1px;
   border: 1px solid var(--divider-color, #888); border-radius: 14px;
