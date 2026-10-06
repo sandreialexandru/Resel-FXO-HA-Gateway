@@ -43,6 +43,7 @@ SETTINGS_SECTIONS: dict[str, dict[str, object]] = {
     },
     "line_cleaning": {
         "denoise": True,
+        "denoise_pregain_db": 0,
         "gate": True,
         "gate_margin_db": 10,
         "gate_db": None,

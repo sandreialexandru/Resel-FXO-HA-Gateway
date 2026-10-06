@@ -54,9 +54,10 @@ SELECTORS: dict[str, Any] = {
     "lowpass_hz": _num(0, 8000, 50, "Hz"),
     "notch_hz": _num(0, 60, 10, "Hz"),
     "notch_max_hz": _num(0, 8000, 50, "Hz"),
-    "notch_q": _num(1, 100, 1),
+    "notch_q": _num(1, 300, 1),
     # line cleaning
     "denoise": BooleanSelector(),
+    "denoise_pregain_db": _num(0, 30, 1, "dB"),
     "gate": BooleanSelector(),
     "gate_margin_db": _num(0, 40, 1, "dB"),
     "gate_db": _num(-100, 0, 1, "dBFS"),

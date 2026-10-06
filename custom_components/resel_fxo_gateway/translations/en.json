@@ -73,6 +73,7 @@
             "description": "Processing order: denoise, noise gate, leveler, then the filters.",
             "data": {
               "denoise": "Neural noise suppression (RNNoise)",
+              "denoise_pregain_db": "Level raise before RNNoise",
               "gate": "Noise gate",
               "gate_margin_db": "Gate margin above the noise floor",
               "gate_db": "Fixed gate threshold",
@@ -84,6 +85,7 @@
             },
             "data_description": {
               "denoise": "Falls back to the plain filters if it cannot load.",
+              "denoise_pregain_db": "Raises the level going into RNNoise and lowers it again after it, so a weak line voice is not cut as noise. Try 12-18 dB when words get cut; 0 = off.",
               "gate": "Mutes the line between words; follows the line noise floor by itself.",
               "gate_margin_db": "Raise it if noise leaks through, lower it if word beginnings get cut.",
               "gate_db": "Leave empty for the automatic threshold, or set e.g. -50 to use a fixed one.",
