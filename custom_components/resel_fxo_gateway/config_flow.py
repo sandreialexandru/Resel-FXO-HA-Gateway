@@ -58,6 +58,9 @@ SELECTORS: dict[str, Any] = {
     # line cleaning
     "denoise": BooleanSelector(),
     "denoise_pregain_db": _num(0, 30, 1, "dB"),
+    "spectral_nr": BooleanSelector(),
+    "spectral_nr_strength": _num(0.5, 8, 0.5),
+    "spectral_nr_floor_db": _num(3, 40, 1, "dB"),
     "gate": BooleanSelector(),
     "gate_margin_db": _num(0, 40, 1, "dB"),
     "gate_db": _num(-100, 0, 1, "dBFS"),

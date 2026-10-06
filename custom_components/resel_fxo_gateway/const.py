@@ -44,6 +44,9 @@ SETTINGS_SECTIONS: dict[str, dict[str, object]] = {
     "line_cleaning": {
         "denoise": True,
         "denoise_pregain_db": 0,
+        "spectral_nr": False,
+        "spectral_nr_strength": 3,
+        "spectral_nr_floor_db": 18,
         "gate": True,
         "gate_margin_db": 10,
         "gate_db": None,

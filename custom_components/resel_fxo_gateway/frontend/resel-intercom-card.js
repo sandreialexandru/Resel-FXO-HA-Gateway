@@ -17,7 +17,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.6.5";
+const CARD_VERSION = "0.7.0";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -75,6 +75,9 @@ const SETTING_DEFAULTS = {
   notch_max_hz: 1500,
   notch_q: 30,
   denoise: true,
+  spectral_nr: false, // spectral noise subtraction (alternative to RNNoise, for steady line noise)
+  spectral_nr_strength: 3,
+  spectral_nr_floor_db: 18,
   denoise_pregain_db: 0, // level raise before RNNoise (undone after it): weak voices are not mistaken for noise
   gate: true,
   gate_margin_db: 10,
@@ -260,10 +263,124 @@ function loadRnnoise() {
   return rnPromise;
 }
 
+// Spectral noise subtraction for steady line noise (hum comb + hiss). The noise spectrum is the per-bin minimum of the
+// smoothed power over the last ~1.5 s, so it follows the line without a calibration step; each bin is attenuated by a
+// Wiener-like gain. STFT 512 / hop 128 (Hann, overlap-add), latency 24 ms. Unlike RNNoise it does not decide what is
+// "voice", so it does not chop words on a weak, hum-laden line.
+class SpectralNR {
+  constructor(strength, floorDb) {
+    this.N = 512;
+    this.H = 128;
+    this.K = this.N / 2 + 1;
+    this.alpha = Math.max(0.5, Number(strength) || 3);
+    this.floor = Math.pow(10, -Math.abs(Number(floorDb) || 18) / 20);
+    const N = this.N;
+    this.win = new Float64Array(N);
+    for (let i = 0; i < N; i++) this.win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N);
+    this.cos = new Float64Array(N / 2);
+    this.sin = new Float64Array(N / 2);
+    for (let i = 0; i < N / 2; i++) { this.cos[i] = Math.cos((2 * Math.PI * i) / N); this.sin[i] = -Math.sin((2 * Math.PI * i) / N); }
+    this.rev = new Uint16Array(N);
+    for (let i = 0, bits = Math.log2(N); i < N; i++) {
+      let r = 0;
+      for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b);
+      this.rev[i] = r;
+    }
+    this.reset();
+  }
+
+  reset() {
+    const { N, K } = this;
+    this.inBuf = new Float64Array(N); // last N input samples
+    this.ola = new Float64Array(N); // overlap-add accumulator
+    this.re = new Float64Array(N);
+    this.im = new Float64Array(N);
+    this.ps = new Float64Array(K); // smoothed power
+    this.blockMin = new Float64Array(K).fill(1e9); // minimum over the current block
+    this.mins = []; // minima of the last blocks
+    this.frame = 0;
+    this.pending = new Float32Array(0);
+    this.g = new Float64Array(K).fill(1);
+    this.primed = 0;
+  }
+
+  _fft(inv) {
+    const { N, re, im, rev, cos, sin } = this;
+    for (let i = 0; i < N; i++) {
+      const j = rev[i];
+      if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+    }
+    for (let size = 2; size <= N; size <<= 1) {
+      const half = size >> 1, step = N / size;
+      for (let i = 0; i < N; i += size) {
+        for (let j = 0, k = 0; j < half; j++, k += step) {
+          const wr = cos[k], wi = inv ? -sin[k] : sin[k];
+          const a = i + j, b = a + half;
+          const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+          re[b] = re[a] - tr; im[b] = im[a] - ti;
+          re[a] += tr; im[a] += ti;
+        }
+      }
+    }
+  }
+
+  _frame() {
+    const { N, H, K, re, im, win, ps, alpha, floor } = this;
+    for (let i = 0; i < N; i++) { re[i] = this.inBuf[i] * win[i]; im[i] = 0; }
+    this._fft(false);
+    const BLOCK = 32, NB = 6; // 32 hops = 0.256 s per block, 6 blocks = 1.5 s
+    const noise = new Float64Array(K);
+    for (let k = 0; k < K; k++) {
+      const p = re[k] * re[k] + im[k] * im[k];
+      ps[k] = this.frame === 0 ? p : 0.6 * ps[k] + 0.4 * p;
+      if (ps[k] < this.blockMin[k]) this.blockMin[k] = ps[k];
+      let m = this.blockMin[k];
+      for (const b of this.mins) if (b[k] < m) m = b[k];
+      noise[k] = m * 1.5;
+      const g = Math.sqrt(Math.max(1 - (alpha * noise[k]) / (p + 1e-12), 0));
+      this.g[k] = g > floor ? g : floor;
+    }
+    if (++this.frame % BLOCK === 0) {
+      this.mins.push(this.blockMin);
+      if (this.mins.length > NB) this.mins.shift();
+      this.blockMin = new Float64Array(K).fill(1e9);
+    }
+    // 3-tap smoothing of the gain across frequency, then mirror to the negative half
+    for (let k = 0; k < K; k++) {
+      const a = this.g[Math.max(0, k - 1)], b = this.g[k], c = this.g[Math.min(K - 1, k + 1)];
+      const gs = (a + b + c) / 3;
+      re[k] *= gs; im[k] *= gs;
+      if (k > 0 && k < K - 1) { re[N - k] = re[k]; im[N - k] = -im[k]; }
+    }
+    this._fft(true);
+    for (let i = 0; i < N; i++) this.ola[i] += (re[i] / N) * win[i] / 1.5; // Hann^2 sums to 1.5 at hop N/4
+  }
+
+  // x: Float32Array (any length). Returns completed samples (24 ms behind the input).
+  process(x) {
+    const { N, H } = this;
+    const out = [];
+    let buf = this.pending.length ? Float32Array.from([...this.pending, ...x]) : x;
+    let pos = 0;
+    while (buf.length - pos >= H) {
+      this.inBuf.copyWithin(0, H);
+      for (let i = 0; i < H; i++) this.inBuf[N - H + i] = buf[pos + i];
+      pos += H;
+      this._frame();
+      for (let i = 0; i < H; i++) out.push(this.ola[i]);
+      this.ola.copyWithin(0, H);
+      this.ola.fill(0, N - H);
+    }
+    this.pending = buf.slice(pos);
+    return Float32Array.from(out);
+  }
+}
+
 class LineProcessor {
   constructor(cfg) {
     this.fs = TARGET_RATE;
     this.denoise = cfg.denoise !== false;
+    this.nr = cfg.spectral_nr === true ? new SpectralNR(cfg.spectral_nr_strength, cfg.spectral_nr_floor_db) : null;
     this.rnPre = Math.pow(10, (Number(cfg.denoise_pregain_db) || 0) / 20);
     this.gateOn = cfg.gate !== false;
     this.levelerOn = cfg.leveler === true;
@@ -313,6 +430,7 @@ class LineProcessor {
   reset() {
     const fs = this.fs;
     this._resetRn();
+    if (this.nr) this.nr.reset();
     // gate
     const hp = 2 * Math.PI * 300 / fs; // detector high-pass (2nd order Butterworth, 300 Hz)
     const alpha = Math.sin(hp) / (2 * 0.7071);
@@ -351,6 +469,7 @@ class LineProcessor {
   // x: Float32Array, 16 kHz, -1..1. Returns a Float32Array (may be shorter/empty while a denoise frame fills).
   process(x) {
     let y = this.rn ? this._denoise(x) : x;
+    if (this.nr) y = this.nr.process(y);
     if (!y.length) return y;
     if (this.gateOn || this.levelerOn) y = this._dynamics(y);
     return y;
