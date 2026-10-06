@@ -274,7 +274,7 @@ Any of these keys can still be written in a card's YAML; there it overrides the 
 | Setting | Default | What it does |
 |---|---|---|
 | `denoise` | `true` | RNNoise neural noise suppression (see below). Falls back silently to the plain filters if it cannot load. |
-| `denoise_pregain_db` | `0` | Card YAML only. Raises the level going into RNNoise and lowers it again afterwards. RNNoise is built for normal speech levels and can cut a weak, band-limited line voice as if it were noise; try `12` to `18` when words get cut. Higher values can make RNNoise treat loud noise as voice. |
+| `denoise_pregain_db` | `0` | Also in the integration options. Raises the level going into RNNoise and lowers it again afterwards. RNNoise is built for normal speech levels and can cut a weak, band-limited line voice as if it were noise; try `12` to `18` when words get cut. Higher values can make RNNoise treat loud noise as voice. |
 | `gate` | `true` | Noise gate: mutes the line between words. It follows the noise floor of the line by itself. |
 | `gate_margin_db` | `10` | How far above the measured noise floor the signal must rise to open the gate. Raise it if noise leaks through, lower it if word beginnings get cut. |
 | `gate_db` | empty | Fixed opening threshold in dBFS (for example `-50`) instead of the automatic one. |
