@@ -274,7 +274,10 @@ Any of these keys can still be written in a card's YAML; there it overrides the 
 | Setting | Default | What it does |
 |---|---|---|
 | `denoise` | `true` | RNNoise neural noise suppression (see below). Falls back silently to the plain filters if it cannot load. |
-| `denoise_pregain_db` | `0` | Also in the integration options. Raises the level going into RNNoise and lowers it again afterwards. RNNoise is built for normal speech levels and can cut a weak, band-limited line voice as if it were noise; try `12` to `18` when words get cut. Higher values can make RNNoise treat loud noise as voice. |
+| `denoise_pregain_db` | `0` | Also in the integration options. Raises the level going into RNNoise and lowers it again afterwards. RNNoise is built for normal speech levels and can cut a weak, band-limited line voice as if it were noise; in a test on a real recording it made no measurable difference, so do not count on it. |
+| `spectral_nr` | `false` | Spectral noise reduction: learns the steady line noise (hum comb and hiss) from the quietest 1.5 s and subtracts it, also while someone speaks. On a real weak line recording RNNoise cut 40-48 % of the voice frames by more than 15 dB, while this gave about +8 dB signal-to-noise with almost no cut frames. Use it **instead of** `denoise`. Latency 24 ms. |
+| `spectral_nr_strength` | `3` | How much of the estimated noise is subtracted (2-4 useful). Higher = cleaner, more watery. |
+| `spectral_nr_floor_db` | `18` | The most any frequency is attenuated, in dB. |
 | `gate` | `true` | Noise gate: mutes the line between words. It follows the noise floor of the line by itself. |
 | `gate_margin_db` | `10` | How far above the measured noise floor the signal must rise to open the gate. Raise it if noise leaks through, lower it if word beginnings get cut. |
 | `gate_db` | empty | Fixed opening threshold in dBFS (for example `-50`) instead of the automatic one. |
