@@ -15,12 +15,13 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.typing import ConfigType
 
 from .bridge import AudioBridge, Listener
+from .card_resource import async_register_card_resource, async_remove_card_resource, card_url
 from .config_flow import card_settings
 from .const import (
-    CARD_FILENAME,
     CARD_URL_BASE,
     CONF_HOST,
     CONF_PORT,
@@ -42,12 +43,22 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # cache_headers=True lets the browser / companion app keep the card after the first download, so it is
     # available instantly when the app restarts (e.g. after switching from mobile data to Wi-Fi). Safe, because
     # the URL carries the version below: every release gets a new URL and is fetched again.
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(CARD_URL_BASE, str(frontend_dir), cache_headers=True)]
-    )
+    try:
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(CARD_URL_BASE, str(frontend_dir), cache_headers=True)]
+        )
+    except RuntimeError:
+        _LOGGER.debug("Static path %s is already registered", CARD_URL_BASE)
     # the version in the URL makes browsers fetch the new card after every release
     version = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
-    add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_FILENAME}?v={version}")
+    # Main way: a Lovelace resource, loaded by the dashboard itself (works in browsers and in the companion app
+    # even when they keep an old copy of the start page). Registered once Home Assistant has started.
+    async def _register_resource(_hass: HomeAssistant) -> None:
+        await async_register_card_resource(hass, version)
+
+    async_at_started(hass, _register_resource)
+    # Fallback: injected into the start page (same URL, so the browser runs the module only once).
+    add_extra_js_url(hass, card_url(version))
     websocket_api.async_register_command(hass, ws_subscribe_audio)
     websocket_api.async_register_command(hass, ws_send_audio)
     websocket_api.async_register_command(hass, ws_subscribe_settings)
@@ -70,6 +81,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     bridge: AudioBridge = hass.data[DOMAIN].pop(entry.entry_id)
     await bridge.async_close()
     return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """The last entry was deleted: take the card's Lovelace resource away too."""
+    if not [e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id]:
+        await async_remove_card_resource(hass)
 
 
 def _get_bridge(hass: HomeAssistant) -> AudioBridge | None:

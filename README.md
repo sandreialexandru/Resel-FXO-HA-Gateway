@@ -239,7 +239,7 @@ Card options (all optional; the value shown is the default). The audio and push-
 - **card-mod:** the root is `<ha-card>` and every part has a class (`.header`, `.status`, `.meter`, `.answer`, `.hangup`, `.ptt`, `.custom`). Custom buttons expose `data-state`, for example `.custom[data-state="on"] { … }`.
 - **Status strings:** the card expects the ESPHome text sensor to report `Inactiv`, `Suna`, `Conectare`, `In apel - ascult` and `In apel - vorbesc`.
 
-**Troubleshooting: "Custom element doesn't exist: resel-intercom-card".** The integration loads the card by itself, so no Lovelace resource is needed. If you added one by hand earlier, delete it (Settings → Dashboards → Resources), otherwise the card is loaded twice, possibly in an old version. The card file is cached by the browser/companion app (its URL carries the version), so after the first download it is available at once, even when the app restarts on another network. If the error still shows up after switching networks, the script request itself failed: in the companion app use Settings → Companion app → Troubleshooting → *Reload frontend* (or clear the frontend cache).
+**Troubleshooting: "Custom element doesn't exist: resel-intercom-card".** The integration registers the card by itself as a **Lovelace resource** (type *JavaScript module*, URL `/resel_fxo_gateway/resel-intercom-card.js?v=<version>`), and updates it on every release, so you do not have to add anything. It is also injected into the start page as a fallback. A Lovelace resource is loaded by the dashboard itself, so it still works when the browser or the companion app keeps an old copy of the start page (after a restart, an update or an expired cache). Check Settings → Dashboards → ⋮ → Resources: there must be exactly one entry for the card (duplicates are removed automatically at the next start). If your Lovelace is in YAML mode, Home Assistant cannot edit the resources: add `- url: /resel_fxo_gateway/resel-intercom-card.js` with `type: module` yourself (the log shows the exact line). After updating the integration, restart Home Assistant once; in the companion app use Settings → Companion app → Troubleshooting → *Reload frontend* if an old copy persists.
 
 ### 4. Audio settings
 
@@ -325,7 +325,9 @@ Any of these keys can still be written in a card's YAML; there it overrides the 
 ```
 components/audio_tcp/                 ESPHome external component (C++)
 custom_components/resel_fxo_gateway/  Home Assistant integration
+  card_resource.py                    registers the card as a Lovelace resource
   frontend/resel-intercom-card.js     Lovelace card
+tests/                                pytest (pytest-homeassistant-custom-component, see requirements_test.txt)
 hacs.json                             HACS metadata
 .github/workflows/release.yml         creates a release when the manifest version changes
 ```
