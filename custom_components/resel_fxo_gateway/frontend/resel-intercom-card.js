@@ -17,7 +17,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.6.3";
+const CARD_VERSION = "0.6.4";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -75,6 +75,7 @@ const SETTING_DEFAULTS = {
   notch_max_hz: 1500,
   notch_q: 30,
   denoise: true,
+  denoise_pregain_db: 0, // level raise before RNNoise (undone after it): weak voices are not mistaken for noise
   gate: true,
   gate_margin_db: 10,
   gate_db: null, // null = automatic threshold
@@ -263,6 +264,7 @@ class LineProcessor {
   constructor(cfg) {
     this.fs = TARGET_RATE;
     this.denoise = cfg.denoise !== false;
+    this.rnPre = Math.pow(10, (Number(cfg.denoise_pregain_db) || 0) / 20);
     this.gateOn = cfg.gate !== false;
     this.levelerOn = cfg.leveler === true;
     this.gateMargin = cfg.gate_margin_db ?? 10;
@@ -387,11 +389,12 @@ class LineProcessor {
       // RNNoise (expects 16-bit-scaled floats, 480 samples)
       let heap = mod.HEAPF32;
       const base = ptr >> 2;
-      for (let i = 0; i < RN_OUT; i++) heap[base + i] = up[i] * 32768;
+      const pre = this.rnPre;
+      for (let i = 0; i < RN_OUT; i++) heap[base + i] = Math.max(-32768, Math.min(32767, up[i] * pre * 32768));
       this.vad = mod._rnnoise_process_frame(ctx, ptr, ptr);
       heap = mod.HEAPF32;
       yb.set(this.yh, 0);
-      for (let i = 0; i < RN_OUT; i++) yb[this.yh.length + i] = heap[base + i] / 32768;
+      for (let i = 0; i < RN_OUT; i++) yb[this.yh.length + i] = heap[base + i] / 32768 / pre;
       this.yh.set(yb.subarray(RN_OUT)); // last (taps-1) samples
       // low-pass + decimate by 3
       for (let n = 0; n < RN_IN; n++) {
