@@ -39,7 +39,8 @@ flowchart LR
 1. Someone rings from the panel. The ring detector latches, `Interfon Sonerie` turns on and a `esphome.resel_ring` event is fired.
 2. **Answer** lifts the hook (GPIO32 high) and starts listening. The card shows the line audio.
 3. **Hold to talk** turns the PTT switch on: the ESP32 stops the microphone, switches the speaker on and accepts audio from the card. Releasing returns to listening.
-4. **Open door** dials `0` (pulse or DTMF, selectable) and puts the line back on hook. The panel ends the call after opening the door.
+4. **Open door** (during the call) dials `0` (pulse or DTMF, selectable), keeps the line for a configurable time so you can hear what happens, then puts it back on hook. The panel ends the call after opening the door.
+5. **Dial** sends any keys typed in the `Numar de Format` text field (digits, `*`, `#`, `A`-`D`) while the line is up, e.g. a neighbour's apartment number. If the text contains `*#A-D` DTMF is used automatically, otherwise the pulse/DTMF switch decides. The line must already be answered (off hook); dialing waits until 1.5 s after the hook went up so the dial tone is there.
 
 ### Audio transport (`audio_tcp`)
 
@@ -61,7 +62,9 @@ The Home Assistant side keeps **one** connection to the ESP32 and fans it out to
 - Measured on a multimeter: on hook the line sits around **50 V**; during a ring the AC voltage jumps to about **50–60 V** and drops to 0 in a repeating burst pattern.
 - Measured with the ESP32 circuit: with the hook output high the line reads about **8 V**, the same as with the handset lifted.
 - The speaker and microphone gain potentiometers are on the exterior central unit, not in the apartment.
-- **The door opens with key `0`.** It works with both pulse and tone dialing on the post. `#0` calls the building panel (tone mode).
+- The street panel (ISCP-01N-50 MF) has software gains **u2 (microphone)** and **u1 (speaker)**, 0-19, adjusted from the panel keypad during a call after typing the settings access code and `*` (display shows `uu`; keys 3/6 = mic up/down, 1/4 = speaker up/down). The access code is set by the installer. If the visitor's voice is weak, raising u2 gives more than any gain on the ESP side, because it improves the signal before the noise.
+- **The door opens with key `0`** (the post manual also lists 7, 8, 9 and 0 during a conversation). It works with both pulse and tone dialing. `#0` (or `007`) calls the building panel; in practice `#0` was also seen to open the door, which is simply treated as a feature.
+- Other apartments are reached by dialing their number; this works with pulse and with DTMF.
 - The panel closes the call after opening the door, so the firmware always puts the line back on hook after a door command.
 - Calls last at most about one minute, so the firmware watchdog (v7h) releases the line after 1 minute.
 
@@ -119,9 +122,10 @@ All measured on the real line of the author's apartment.
 | Item | Value |
 |---|---|
 | Pulse | 60 ms break + 40 ms make (10 pulses/s), 800 ms between digits, `0` = 10 pulses |
-| DTMF | one continuous tone per key, **450 ms** (works on the real line), amplitude 28000/32767. The tone length is selectable in the firmware and is the same for every DTMF key sent |
+| DTMF | one continuous tone per key (default 450 ms) + gap (default 50 ms); works with 50-100 ms gaps, 90 ms was the most reliable; both are sliders. Tone level is its own slider (default -10 dB, 0 dB = amplitude 28000/32767), independent of the DAC |
+| Wait after off-hook before dialing | fixed 1.5 s (only if dialing starts from on-hook; about 0.2 s if already in a call) |
+| After the last key | 250 ms tail, then the microphone restarts (about 0.6 s after the last key); ring detection stays guarded by the arming rule |
 | Pulse / DTMF | one switch in the firmware picks the mode for every key sent; `#0` (call the panel) is always DTMF |
-| Wait after off-hook before dialing | 1.5 s |
 | Door command cooldown | 10 s |
 
 ### Audio
@@ -134,6 +138,8 @@ All measured on the real line of the author's apartment.
 | Band 300–3400 Hz | about **−72 dBFS** |
 | Fix | notch comb on 50 Hz multiples + high-pass 300–350 Hz in the card (noise −63 → −83 dBFS) |
 | Card level meter | `−90 dBFS` means the clamp floor (microphone stopped), not measured noise |
+| Input gain (WM8960) | PGA -17.25...+30 dB plus boost 0/+13/+20/+29 dB. Noise scales 1:1 with the total, so the split does not change the SNR. Boost 29 + PGA 18-20 is a good starting point |
+| Output level | DAC slider -73...+6 dB; it also sets the DTMF level together with the DTMF level slider |
 | Streaming chunk | 40 ms (640 samples) |
 | Playback jitter buffer in the card | about 120 ms, dropped if more than 800 ms behind |
 | PTT safety timeout | 30 s on the ESP32 |
@@ -288,7 +294,7 @@ Any of these keys can still be written in a card's YAML; there it overrides the 
 - Ring detection (digital and optional ADC), including the 6 s hold and the post-hook lockout
 - Off-hook, hang-up, 1-minute watchdog
 - Pulse dialing: door opens with `0`, other numbers can be dialed
-- DTMF dialing with a 450 ms tone, including `#0` for the building panel
+- DTMF dialing for the building panel (`#0`) and for other apartments (free dial field, with adjustable tone, gap and level)
 - Continuous real-time audio from the intercom to the ESP32 and over TCP to a client
 - Token handshake, PTT switch, microphone/speaker hand-over in the ESP32 logs
 
@@ -300,8 +306,9 @@ Any of these keys can still be written in a card's YAML; there it overrides the 
 
 **Not yet verified**
 
-- Voice level at the panel with someone speaking, and intelligibility of the voice sent *to* the panel
-- Door opening with a DTMF `0` (pulse works)
+- Voice level of the visitor is still low; raising the panel's u2 software gain is the next step
+- Intelligibility of the voice sent *to* the panel
+- Door opening with a DTMF `0` in every situation (it works with 450 ms tones; pulse also works)
 - Microphone permission and audio in the Home Assistant companion app and Fully Kiosk
 - Running with several cards open at the same time on real devices
 
