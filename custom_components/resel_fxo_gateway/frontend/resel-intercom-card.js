@@ -17,7 +17,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.6.0";
+const CARD_VERSION = "0.6.1";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -35,7 +35,7 @@ const DEFAULT_LABELS = {
   connecting_text: "Connecting to the line…",
   listening_text: "Listening to the line",
   talking_text: "You are heard at the panel",
-  answer: "Answer",
+  answer: "Pick up",
   dial: "Dial",
   dial_placeholder: "Keys to dial",
   hangup: "Hang up",
@@ -782,7 +782,7 @@ class ReselIntercomCard extends HTMLElement {
       const s = this._stateObj(k);
       return !!s && s.state !== "unavailable";
     };
-    e.answer.disabled = !(mode === "ringing" && avail("answer"));
+    e.answer.disabled = !((mode === "ringing" || mode === "idle") && avail("answer")); // lifts the handset: also without a ring (to dial a neighbour)
     e.hangup.disabled = !((inCall || mode === "connecting") && avail("hangup"));
     const micOk = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && window.isSecureContext !== false;
     e.ptt.disabled = !(inCall && avail("ptt"));

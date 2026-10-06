@@ -37,10 +37,10 @@ flowchart LR
 ### Call flow
 
 1. Someone rings from the panel. The ring detector latches, `Interfon Sonerie` turns on and a `esphome.resel_ring` event is fired.
-2. **Answer** lifts the hook (GPIO32 high) and starts listening. The card shows the line audio.
+2. **Pick up** lifts the hook (GPIO32 high) and starts listening. The card shows the line audio. It works whenever the line is on hook, not only while ringing, so you can start a call yourself (for example to dial a neighbour). **Hang up** puts the line back on hook.
 3. **Hold to talk** turns the PTT switch on: the ESP32 stops the microphone, switches the speaker on and accepts audio from the card. Releasing returns to listening.
 4. **Open door** (during the call) dials `0` (pulse or DTMF, selectable), keeps the line for a configurable time so you can hear what happens, then puts it back on hook. The panel ends the call after opening the door.
-5. **Dial** sends any keys typed in the `Numar de Format` text field (digits, `*`, `#`, `A`-`D`) while the line is up, e.g. a neighbour's apartment number. If the text contains `*#A-D` DTMF is used automatically, otherwise the pulse/DTMF switch decides. The line must already be answered (off hook); dialing waits until 1.5 s after the hook went up so the dial tone is there.
+5. **Dial** sends any keys typed in the `Numar de Format` text field (digits, `*`, `#`, `A`-`D`) while the line is up, e.g. a neighbour's apartment number. If the text contains `*#A-D` DTMF is used automatically, otherwise the pulse/DTMF switch decides. The line must already be picked up (off hook); dialing waits until 1.5 s after the hook went up so the dial tone is there.
 
 ### Audio transport (`audio_tcp`)
 
@@ -224,7 +224,7 @@ Card options (all optional; the value shown is the default). The audio and push-
 
 **Buttons**
 
-`buttons` is a list shown two per row under the talk button. With an odd number of buttons the last one takes the whole row (for example 3 buttons: two side by side, the third full width). Without the list you get only *Open door* (it works during a call, after *Answer*). Each button takes:
+`buttons` is a list shown two per row under the talk button. With an odd number of buttons the last one takes the whole row (for example 3 buttons: two side by side, the third full width). Without the list you get only *Open door* (it works during a call, after *Pick up*). Each button takes:
 
 | Key | What it does |
 |---|---|
