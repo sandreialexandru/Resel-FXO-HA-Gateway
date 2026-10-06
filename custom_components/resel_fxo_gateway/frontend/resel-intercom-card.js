@@ -17,7 +17,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.5.2";
+const CARD_VERSION = "0.6.0";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -36,6 +36,8 @@ const DEFAULT_LABELS = {
   listening_text: "Listening to the line",
   talking_text: "You are heard at the panel",
   answer: "Answer",
+  dial: "Dial",
+  dial_placeholder: "Keys to dial",
   hangup: "Hang up",
   ptt_unavailable: "Talking is available during a call",
   ptt_hold: "Hold to talk",
@@ -107,6 +109,8 @@ const DEFAULT_ENTITY_SUFFIX = {
   ptt: "switch.{p}ptt",
   level: "sensor.{p}nivel_microfon_rms",
   door_open: "button.{p}deschide_usa",
+  dial_text: "text.{p}numar_de_format",
+  dial_button: "button.{p}formeaza",
 };
 
 const CAPTURE_WORKLET = `
@@ -147,6 +151,14 @@ ha-card { padding: 16px; box-sizing: border-box; }
 .pair, .custom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 /* odd number of custom buttons: the last one takes the whole row */
 .custom-grid > .custom:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.dial { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+.dial input {
+  min-width: 0; height: 48px; box-sizing: border-box; padding: 0 14px; font: inherit; font-size: 16px; letter-spacing: 1px;
+  border: 1px solid var(--divider-color, #888); border-radius: 14px;
+  background: var(--card-background-color, transparent); color: var(--primary-text-color);
+}
+.dial input:disabled { opacity: .7; border-style: dashed; }
+.dial .btn { padding: 0 18px; }
 .btn {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   border: 1px solid var(--divider-color, #888); border-radius: 14px;
@@ -508,6 +520,7 @@ class ReselIntercomCard extends HTMLElement {
         show_header: config.show_header !== false,
         show_level: config.show_level !== false,
         show_timer: config.show_timer === true,
+        show_dial: config.dial === true,
       },
       resolveSettings(config, this._serverSettings)
     );
@@ -548,6 +561,7 @@ class ReselIntercomCard extends HTMLElement {
         <button type="button" class="btn ptt"><ha-icon icon="mdi:microphone"></ha-icon><span class="ptt-text"></span><span class="timer"></span></button>
         <div class="toast"></div>
         <div class="custom-grid"></div>
+        <div class="dial" hidden><input type="text" inputmode="tel" maxlength="32" autocomplete="off" spellcheck="false"><button type="button" class="btn dialbtn"><ha-icon icon="mdi:phone-outgoing"></ha-icon><span></span></button></div>
       </div>`;
     root.append(style, card);
     this._el = {
@@ -570,6 +584,9 @@ class ReselIntercomCard extends HTMLElement {
       timer: card.querySelector(".timer"),
       toast: card.querySelector(".toast"),
       grid: card.querySelector(".custom-grid"),
+      dial: card.querySelector(".dial"),
+      dialInput: card.querySelector(".dial input"),
+      dialBtn: card.querySelector(".dialbtn"),
     };
     const e = this._el;
     e.title.textContent = this._cfg.title;
@@ -606,6 +623,17 @@ class ReselIntercomCard extends HTMLElement {
     ptt.addEventListener("pointerup", release);
     ptt.addEventListener("pointercancel", release);
     ptt.addEventListener("lostpointercapture", release);
+
+    // free dial: text field + button (keys are sent by the firmware over the line)
+    e.dial.hidden = !this._cfg.show_dial;
+    e.dialBtn.querySelector("span").textContent = this._cfg.labels.dial;
+    e.dialInput.placeholder = this._cfg.labels.dial_placeholder;
+    e.dialInput.addEventListener("input", () => {
+      const v = e.dialInput.value.toUpperCase().replace(/[^0-9*#A-D]/g, "");
+      if (v !== e.dialInput.value) e.dialInput.value = v;
+    });
+    e.dialInput.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); this._dial(); } });
+    e.dialBtn.addEventListener("click", () => this._dial());
 
     // custom buttons
     e.grid.innerHTML = "";
@@ -790,6 +818,18 @@ class ReselIntercomCard extends HTMLElement {
       if (!c.cfg.name && s) c.label.textContent = s.attributes.friendly_name || id;
     }
 
+    // free dial: only during a call (the line must be up); the field mirrors the stored text while not being edited
+    if (this._cfg.show_dial) {
+      const ts = this._hass && this._hass.states[this._cfg.entities.dial_text];
+      const bs = this._hass && this._hass.states[this._cfg.entities.dial_button];
+      const ok = inCall && !!ts && ts.state !== "unavailable" && !!bs && bs.state !== "unavailable";
+      e.dialInput.disabled = !ok;
+      e.dialBtn.disabled = !ok;
+      if (ts && this.shadowRoot.activeElement !== e.dialInput && e.dialInput.value !== ts.state && ts.state !== "unknown" && ts.state !== "unavailable") {
+        e.dialInput.value = ts.state;
+      }
+    }
+
     // meter
     e.meter.classList.toggle("live", inCall);
     e.note.textContent = talking && inCall ? L.talk_pause_note : "";
@@ -806,6 +846,18 @@ class ReselIntercomCard extends HTMLElement {
   }
 
   // ---------------------------------------------------------------- actions
+  async _dial() {
+    const hass = this._hass;
+    const keys = this._el.dialInput.value.trim();
+    if (!hass || !keys) return;
+    try {
+      await hass.callService("text", "set_value", { entity_id: this._cfg.entities.dial_text, value: keys });
+      await hass.callService("button", "press", { entity_id: this._cfg.entities.dial_button });
+    } catch (err) {
+      this._flash(String((err && err.message) || err), 3000);
+    }
+  }
+
   _press(entityId) {
     if (entityId && this._hass) this._hass.callService("button", "press", { entity_id: entityId });
   }

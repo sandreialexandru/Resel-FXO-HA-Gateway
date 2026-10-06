@@ -192,6 +192,7 @@ entities:
   ptt: switch.resel_fxo_gateway_interfon_ptt
   level: sensor.resel_fxo_gateway_interfon_nivel_microfon_rms
 show_timer: false
+dial: false                # true = text field + Dial button under the custom buttons (needs the firmware's Numar de Format / Formeaza)
 buttons:                  # 2 per row under the PTT button; with an odd count the last one is full width
   - name: Open door
     icon: mdi:door-open
@@ -213,11 +214,12 @@ Card options (all optional; the value shown is the default). The audio and push-
 | Option | Default | What it does |
 |---|---|---|
 | `entity_prefix` | `resel_fxo_gateway_interfon_` | Prefix of the ESPHome entities. If your device name differs (for example a `hall_` area prefix), set this or list every entity under `entities`. |
-| `entities` | derived from the prefix | Explicit entity ids: `state`, `answer`, `hangup`, `ptt`, `level` (and `door_open` for the default button). Anything you set overrides the prefix. |
+| `entities` | derived from the prefix | Explicit entity ids: `state`, `answer`, `hangup`, `ptt`, `level` (and `door_open` for the default button, `dial_text` / `dial_button` for `dial: true`). Anything you set overrides the prefix. |
 | `title` | `Intercom` | Card title. |
 | `show_header` | `true` | Show the title and the state chip. |
 | `show_level` | `true` | Show the level meter. |
 | `show_timer` | `false` | While talking, show the elapsed time against `ptt_timeout`. |
+| `dial` | `false` | Shows a text field and a *Dial* button (during a call only). The keys (`0-9 * # A-D`) are stored in the firmware's `Numar de Format` text entity and sent with `Formeaza`, for example to ring a neighbour. Entity ids come from the prefix (`text.<prefix>numar_de_format`, `button.<prefix>formeaza`) or from `entities.dial_text` / `entities.dial_button`. |
 | `labels` | English | Override any UI text (for translation). |
 
 **Buttons**
