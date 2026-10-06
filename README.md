@@ -269,25 +269,18 @@ Any of these keys can still be written in a card's YAML; there it overrides the 
 | `notch_max_hz` | `1500` | Highest harmonic that gets a notch. |
 | `notch_q` | `30` | Notch sharpness; higher means narrower notches. |
 
-**Line audio: cleaning** (processing order: denoise → gate → leveler → filters)
+**Line audio: cleaning** (processing order: spectral noise reduction → leveler → filters)
 
 | Setting | Default | What it does |
 |---|---|---|
-| `denoise` | `true` | RNNoise neural noise suppression (see below). Falls back silently to the plain filters if it cannot load. |
-| `denoise_pregain_db` | `0` | Also in the integration options. Raises the level going into RNNoise and lowers it again afterwards. RNNoise is built for normal speech levels and can cut a weak, band-limited line voice as if it were noise; in a test on a real recording it made no measurable difference, so do not count on it. |
-| `spectral_nr` | `false` | Spectral noise reduction: learns the steady line noise (hum comb and hiss) from the quietest 1.5 s and subtracts it, also while someone speaks. On a real weak line recording RNNoise cut 40-48 % of the voice frames by more than 15 dB, while this gave about +8 dB signal-to-noise with almost no cut frames. Use it **instead of** `denoise`. Latency 24 ms. |
-| `spectral_nr_strength` | `3` | How much of the estimated noise is subtracted (2-4 useful). Higher = cleaner, more watery. |
+| `spectral_nr` | `true` | Spectral noise reduction: learns the steady line noise (hum comb and hiss) from the quietest 1.5 s and subtracts it, also while someone speaks. Latency 24 ms. |
+| `spectral_nr_strength` | `3` | How much of the estimated noise is subtracted (2-4 useful). Higher = cleaner, but can sound thin or watery. |
 | `spectral_nr_floor_db` | `18` | The most any frequency is attenuated, in dB. |
-| `gate` | `true` | Noise gate: mutes the line between words. It follows the noise floor of the line by itself. |
-| `gate_margin_db` | `10` | How far above the measured noise floor the signal must rise to open the gate. Raise it if noise leaks through, lower it if word beginnings get cut. |
-| `gate_db` | empty | Fixed opening threshold in dBFS (for example `-50`) instead of the automatic one. |
-| `gate_floor_db` | `24` | How much the closed gate attenuates, in dB. A higher value is quieter but more abrupt; a lower one leaves some background. |
-| `gate_hold_ms` | `250` | How long the gate stays open after the voice stops, so word endings are not clipped. |
 | `leveler` | `false` | Slow automatic gain that brings quiet voices up to a constant level, followed by a soft limiter. |
 | `leveler_target_db` | `-24` | Target voice level in dBFS. |
 | `leveler_max_gain_db` | `15` | Largest boost the leveler may apply. |
 
-**About the cleaning chain.** RNNoise ([Xiph](https://jmvalin.ca/demo/rnnoise/), BSD licence, WebAssembly build from `@jitsi/rnnoise-wasm`, credits in `frontend/rnnoise/NOTICE.md`) is a small neural noise suppressor, about 125 KB, loaded only when a call starts. The card resamples the 16 kHz line audio to 48 kHz and back, which adds about 20 ms. On a synthetic test the pauses between words dropped from −74 to −101 dBFS with the speech preserved. Start with the defaults; if the voice is quiet, enable `leveler` and keep `gain` around 4–6.
+**About the cleaning chain.** Earlier versions had a neural suppressor (RNNoise) and a noise gate. Both were removed. On a real recording of a weak, hum-laden line, RNNoise cut 40-48 % of the voice frames by more than 15 dB (words came out in pieces, and raising the level into it changed nothing), and the gate only added abrupt cuts once the spectral reduction had cleaned the pauses. The same recording went from about 12 dB to about 19-22 dB signal-to-noise with the spectral reduction and almost no cut frames. It works because the line noise is steady: hum, its harmonics and hiss. It is not meant for changing noise such as a crowd. If the voice is quiet, enable `leveler` and keep `gain` around 4-6; with the leveler on, keep `leveler_max_gain_db` modest because it also lifts the remaining noise between words.
 
 **Hum filter.** The line noise is mostly 50 Hz and its harmonics. On a recording of the idle line the notch comb took the noise from −63 dBFS to −83 dBFS (high-pass/low-pass alone: −73 dBFS).
 

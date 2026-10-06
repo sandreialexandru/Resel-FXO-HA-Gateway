@@ -17,7 +17,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.7.0";
+const CARD_VERSION = "0.8.0";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -74,16 +74,9 @@ const SETTING_DEFAULTS = {
   notch_hz: 50,
   notch_max_hz: 1500,
   notch_q: 30,
-  denoise: true,
-  spectral_nr: false, // spectral noise subtraction (alternative to RNNoise, for steady line noise)
+  spectral_nr: true, // spectral noise subtraction: learns the steady line noise (hum, hiss) and removes it
   spectral_nr_strength: 3,
   spectral_nr_floor_db: 18,
-  denoise_pregain_db: 0, // level raise before RNNoise (undone after it): weak voices are not mistaken for noise
-  gate: true,
-  gate_margin_db: 10,
-  gate_db: null, // null = automatic threshold
-  gate_floor_db: 24,
-  gate_hold_ms: 250,
   leveler: false,
   leveler_target_db: -24,
   leveler_max_gain_db: 15,
@@ -95,7 +88,6 @@ function resolveSettings(config, server) {
   for (const [k, def] of Object.entries(SETTING_DEFAULTS)) {
     let v = config[k] !== undefined ? config[k] : server && server[k] !== undefined ? server[k] : def;
     if (k === "ptt_mode") v = v === "toggle" ? "toggle" : "hold";
-    else if (k === "gate_db") v = v === undefined || v === null || v === "" || Number.isNaN(Number(v)) ? null : Number(v);
     else if (typeof def === "boolean") v = v === true || v === "true";
     else {
       v = Number(v);
@@ -224,49 +216,13 @@ function b64ToBytes(b64) {
 }
 
 // ------------------------------------------------------------------ line audio processing (16 kHz, in JS)
-// Stages, in order:  denoise (RNNoise) -> noise gate -> leveler (compressor/AGC + soft limiter).
+// Stages, in order:  spectral noise reduction -> leveler (compressor/AGC + soft limiter).
 // Runs on the raw PCM from the line, BEFORE the WebAudio filter chain (hum notches, high/low-pass, gain).
-const RN_BASE = "/resel_fxo_gateway/rnnoise"; // served by the integration, next to this file
-const RN_IN = 160; // one RNNoise frame (10 ms) at 16 kHz
-const RN_OUT = 480; // the same 10 ms at 48 kHz (what RNNoise needs)
-const RN_TAPS = 95;
-let rnLowpass = null;
-let rnPromise = null;
-
-function designLowpass(n, fc) {
-  // Blackman-windowed sinc, DC gain 1; fc in cycles/sample
-  const h = new Float32Array(n);
-  const m = (n - 1) / 2;
-  let sum = 0;
-  for (let i = 0; i < n; i++) {
-    const x = i - m;
-    const s = x === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * x) / (Math.PI * x);
-    const w = 0.42 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)) + 0.08 * Math.cos((4 * Math.PI * i) / (n - 1));
-    h[i] = s * w;
-    sum += h[i];
-  }
-  for (let i = 0; i < n; i++) h[i] /= sum;
-  return h;
-}
-
-// Loads the RNNoise WebAssembly module once (about 125 kB, cached by the browser). Resolves to null on failure.
-function loadRnnoise() {
-  if (!rnPromise) {
-    const v = encodeURIComponent(CARD_VERSION);
-    rnPromise = import(`${RN_BASE}/rnnoise.js?v=${v}`)
-      .then((m) => (m.default || m)({ locateFile: (p) => `${RN_BASE}/${p}?v=${v}` }))
-      .catch((e) => {
-        console.warn("resel-intercom-card: RNNoise could not be loaded, continuing without it", e);
-        return null;
-      });
-  }
-  return rnPromise;
-}
 
 // Spectral noise subtraction for steady line noise (hum comb + hiss). The noise spectrum is the per-bin minimum of the
 // smoothed power over the last ~1.5 s, so it follows the line without a calibration step; each bin is attenuated by a
-// Wiener-like gain. STFT 512 / hop 128 (Hann, overlap-add), latency 24 ms. Unlike RNNoise it does not decide what is
-// "voice", so it does not chop words on a weak, hum-laden line.
+// Wiener-like gain. STFT 512 / hop 128 (Hann, overlap-add), latency 24 ms. It does not decide what is "voice", so it
+// does not chop words on a weak, hum-laden line.
 class SpectralNR {
   constructor(strength, floorDb) {
     this.N = 512;
@@ -379,59 +335,19 @@ class SpectralNR {
 class LineProcessor {
   constructor(cfg) {
     this.fs = TARGET_RATE;
-    this.denoise = cfg.denoise !== false;
-    this.nr = cfg.spectral_nr === true ? new SpectralNR(cfg.spectral_nr_strength, cfg.spectral_nr_floor_db) : null;
-    this.rnPre = Math.pow(10, (Number(cfg.denoise_pregain_db) || 0) / 20);
-    this.gateOn = cfg.gate !== false;
+    this.nr = cfg.spectral_nr !== false ? new SpectralNR(cfg.spectral_nr_strength, cfg.spectral_nr_floor_db) : null;
     this.levelerOn = cfg.leveler === true;
-    this.gateMargin = cfg.gate_margin_db ?? 10;
-    this.gateAbs = typeof cfg.gate_db === "number" && !Number.isNaN(cfg.gate_db) ? cfg.gate_db : null;
-    this.gateFloor = Math.pow(10, -Math.abs(cfg.gate_floor_db ?? 24) / 20);
-    this.holdBlocks = Math.max(0, Math.round((cfg.gate_hold_ms ?? 250) / 10));
     this.levTarget = cfg.leveler_target_db ?? -24;
     this.levMax = cfg.leveler_max_gain_db ?? 15;
-    this.rn = null; // {mod, ctx, ptr}
     this.reset();
   }
 
-  setRnnoise(mod) {
-    if (!mod || this.rn || !this.denoise) return;
-    try {
-      const ptr = mod._malloc(RN_OUT * 4);
-      const ctx = mod._rnnoise_create();
-      if (!ptr || !ctx) return;
-      this.rn = { mod, ctx, ptr };
-      if (!rnLowpass) rnLowpass = designLowpass(RN_TAPS, 7000 / 48000);
-      this._resetRn();
-    } catch (e) {
-      console.warn("resel-intercom-card: RNNoise init failed", e);
-      this.rn = null;
-    }
-  }
-
-  destroy() {
-    if (this.rn) {
-      try {
-        this.rn.mod._rnnoise_destroy(this.rn.ctx);
-        this.rn.mod._free(this.rn.ptr);
-      } catch (_) { /* ignore */ }
-      this.rn = null;
-    }
-  }
-
-  _resetRn() {
-    this.fifo = new Float32Array(RN_IN * 16);
-    this.fifoN = 0;
-    this.xh = new Float32Array(Math.ceil(RN_TAPS / 3) + 2); // last input samples (16 kHz)
-    this.yh = new Float32Array(RN_TAPS - 1); // last denoised samples (48 kHz)
-    this.vad = 0;
-  }
+  destroy() { /* nothing to free */ }
 
   reset() {
     const fs = this.fs;
-    this._resetRn();
     if (this.nr) this.nr.reset();
-    // gate
+    // voice detector for the leveler (the leveler only adapts while someone is speaking)
     const hp = 2 * Math.PI * 300 / fs; // detector high-pass (2nd order Butterworth, 300 Hz)
     const alpha = Math.sin(hp) / (2 * 0.7071);
     const cs = Math.cos(hp);
@@ -444,16 +360,11 @@ class LineProcessor {
     this.hx1 = this.hx2 = this.hy1 = this.hy2 = 0;
     this.pw = 0; // smoothed detector power
     this.aPw = 1 - Math.exp(-1 / (0.01 * fs));
-    this.aAtt = 1 - Math.exp(-1 / (0.004 * fs));
-    this.aRel = 1 - Math.exp(-1 / (0.12 * fs));
     this.blockN = 0;
     this.minRing = new Float32Array(200).fill(-60); // detector level (dB) per 10 ms, last 2 s
     this.ringI = 0;
-    this.open = false;
+    this.open = false; // "voice present"
     this.hold = 0;
-    this.gate = this.gateFloor;
-    this.delay = new Float32Array(160); // 10 ms look-ahead so the start of a word is not cut
-    this.delayI = 0;
     // leveler
     this.lp = 0; // smoothed level of the passed signal
     this.aLp = 1 - Math.exp(-1 / (0.3 * fs));
@@ -466,73 +377,18 @@ class LineProcessor {
     this.levelDb = -90;
   }
 
-  // x: Float32Array, 16 kHz, -1..1. Returns a Float32Array (may be shorter/empty while a denoise frame fills).
+  // x: Float32Array, 16 kHz, -1..1. Returns a Float32Array (may be shorter/empty while a frame fills).
   process(x) {
-    let y = this.rn ? this._denoise(x) : x;
-    if (this.nr) y = this.nr.process(y);
+    let y = this.nr ? this.nr.process(x) : x;
     if (!y.length) return y;
-    if (this.gateOn || this.levelerOn) y = this._dynamics(y);
+    if (this.levelerOn) y = this._dynamics(y);
     return y;
-  }
-
-  _denoise(x) {
-    const { mod, ctx, ptr } = this.rn;
-    if (this.fifoN + x.length > this.fifo.length) {
-      const f = new Float32Array((this.fifoN + x.length) * 2);
-      f.set(this.fifo.subarray(0, this.fifoN));
-      this.fifo = f;
-    }
-    this.fifo.set(x, this.fifoN);
-    this.fifoN += x.length;
-    const frames = Math.floor(this.fifoN / RN_IN);
-    const out = new Float32Array(frames * RN_IN);
-    const h = rnLowpass;
-    const xh = this.xh;
-    const xl = xh.length;
-    const up = new Float32Array(RN_OUT);
-    const yb = new Float32Array(this.yh.length + RN_OUT);
-    for (let f = 0; f < frames; f++) {
-      const cur = this.fifo.subarray(f * RN_IN, (f + 1) * RN_IN);
-      // upsample x3: zero-stuff + low-pass, only the non-zero taps are summed
-      for (let m = 0; m < RN_OUT; m++) {
-        let s = 0;
-        for (let j = Math.floor(m / 3), k = m - 3 * j; k < RN_TAPS; j--, k += 3) {
-          const v = j >= 0 ? cur[j] : xh[xl + j];
-          s += h[k] * v;
-        }
-        up[m] = 3 * s;
-      }
-      // keep the last input samples for the next frame
-      if (RN_IN >= xl) xh.set(cur.subarray(RN_IN - xl));
-      else { xh.copyWithin(0, RN_IN); xh.set(cur, xl - RN_IN); }
-      // RNNoise (expects 16-bit-scaled floats, 480 samples)
-      let heap = mod.HEAPF32;
-      const base = ptr >> 2;
-      const pre = this.rnPre;
-      for (let i = 0; i < RN_OUT; i++) heap[base + i] = Math.max(-32768, Math.min(32767, up[i] * pre * 32768));
-      this.vad = mod._rnnoise_process_frame(ctx, ptr, ptr);
-      heap = mod.HEAPF32;
-      yb.set(this.yh, 0);
-      for (let i = 0; i < RN_OUT; i++) yb[this.yh.length + i] = heap[base + i] / 32768 / pre;
-      this.yh.set(yb.subarray(RN_OUT)); // last (taps-1) samples
-      // low-pass + decimate by 3
-      for (let n = 0; n < RN_IN; n++) {
-        const c = this.yh.length + 3 * n;
-        let s = 0;
-        for (let k = 0; k < RN_TAPS; k++) s += h[k] * yb[c - k];
-        out[f * RN_IN + n] = s;
-      }
-    }
-    const rest = this.fifoN - frames * RN_IN;
-    this.fifo.copyWithin(0, frames * RN_IN, this.fifoN);
-    this.fifoN = rest;
-    return out;
   }
 
   _dynamics(x) {
     const n = x.length;
     const out = new Float32Array(n);
-    const hold = this.holdBlocks;
+    const hold = 50; // 500 ms of hold so the leveler does not adapt between words
     for (let i = 0; i < n; i++) {
       const s = x[i];
       // --- detector: 300 Hz high-passed power, 10 ms smoothing
@@ -548,17 +404,11 @@ class LineProcessor {
         let mn = 1e9;
         for (let k = 0; k < this.minRing.length; k++) if (this.minRing[k] < mn) mn = this.minRing[k];
         this.floorDb = Math.min(-35, Math.max(-100, mn));
-        const open = this.gateAbs !== null ? this.gateAbs : this.floorDb + this.gateMargin;
+        const open = this.floorDb + 6; // voice = 6 dB above the noise floor
         if (db > open) { this.open = true; this.hold = hold; }
         else if (db < open - 4) { if (this.hold > 0) this.hold--; else this.open = false; }
       }
-      // --- gate gain, with attack/release smoothing; the signal is delayed 10 ms behind the detector
-      const target = this.gateOn ? (this.open ? 1 : this.gateFloor) : 1;
-      this.gate += (target - this.gate) * (target > this.gate ? this.aAtt : this.aRel);
-      const dly = this.delay[this.delayI];
-      this.delay[this.delayI] = s;
-      this.delayI = (this.delayI + 1) % this.delay.length;
-      let v = dly * this.gate;
+      let v = s;
       // --- leveler (compressor/AGC) + soft limiter
       if (this.levelerOn) {
         if (this.open) this.lp += (v * v - this.lp) * this.aLp;
@@ -804,7 +654,7 @@ class ReselIntercomCard extends HTMLElement {
     this._unsubscribe();
     this._releaseMic();
     this._stopLevelTimer();
-    if (this._pb) this._pb.proc.reset(); // keep the RNNoise state, drop buffered audio
+    if (this._pb) this._pb.proc.reset(); // drop buffered audio
   }
 
   // ---------------------------------------------------------------- settings from the integration
@@ -1109,11 +959,6 @@ class ReselIntercomCard extends HTMLElement {
     tail.connect(analyser);
     analyser.connect(ctx.destination);
     const proc = new LineProcessor(this._cfg);
-    if (this._cfg.denoise) {
-      loadRnnoise().then((mod) => {
-        if (mod && this._pb && this._pb.proc === proc) proc.setRnnoise(mod);
-      });
-    }
     this._pb = { head, analyser, proc, buf: new Float32Array(analyser.fftSize) };
     return this._pb;
   }
@@ -1139,7 +984,7 @@ class ReselIntercomCard extends HTMLElement {
     const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, n);
     let samples = new Float32Array(n);
     for (let i = 0; i < n; i++) samples[i] = pcm[i] / 32768;
-    samples = pb.proc.process(samples); // denoise -> gate -> leveler (may return fewer samples while a frame fills)
+    samples = pb.proc.process(samples); // noise reduction -> leveler (may return fewer samples while a frame fills)
     if (!samples.length) return;
     const buf = ctx.createBuffer(1, samples.length, TARGET_RATE);
     buf.getChannelData(0).set(samples);

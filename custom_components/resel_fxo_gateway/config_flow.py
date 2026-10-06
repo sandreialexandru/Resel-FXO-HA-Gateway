@@ -56,16 +56,9 @@ SELECTORS: dict[str, Any] = {
     "notch_max_hz": _num(0, 8000, 50, "Hz"),
     "notch_q": _num(1, 300, 1),
     # line cleaning
-    "denoise": BooleanSelector(),
-    "denoise_pregain_db": _num(0, 30, 1, "dB"),
     "spectral_nr": BooleanSelector(),
     "spectral_nr_strength": _num(0.5, 8, 0.5),
     "spectral_nr_floor_db": _num(3, 40, 1, "dB"),
-    "gate": BooleanSelector(),
-    "gate_margin_db": _num(0, 40, 1, "dB"),
-    "gate_db": _num(-100, 0, 1, "dBFS"),
-    "gate_floor_db": _num(0, 60, 1, "dB"),
-    "gate_hold_ms": _num(0, 2000, 10, "ms"),
     "leveler": BooleanSelector(),
     "leveler_target_db": _num(-60, 0, 1, "dBFS"),
     "leveler_max_gain_db": _num(0, 40, 1, "dB"),
@@ -88,7 +81,7 @@ def _options_schema(current: dict[str, Any]) -> vol.Schema:
         for key in keys:
             value = current.get(key)
             if value is None:
-                # optional field without a value (gate_db = automatic): leave the box empty
+                # optional field without a value: leave the box empty
                 sec_fields[vol.Optional(key)] = SELECTORS[key]
             else:
                 sec_fields[vol.Optional(key, description={"suggested_value": value})] = SELECTORS[key]
@@ -137,7 +130,7 @@ class ReselFxoGatewayOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             # sections arrive nested; store them flat. A key missing from the input was cleared in the
-            # form: numbers fall back to their default, gate_db stays empty (= automatic threshold).
+            # form: numbers fall back to their default.
             flat: dict[str, Any] = {}
             for sec_name, keys in SETTINGS_SECTIONS.items():
                 given = user_input.get(sec_name) or {}
