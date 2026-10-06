@@ -17,7 +17,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.6.2";
+const CARD_VERSION = "0.6.3";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -38,6 +38,7 @@ const DEFAULT_LABELS = {
   answer: "Pick up",
   dial: "Dial",
   dial_placeholder: "Keys to dial",
+  dial_need_call: "Pick up first: keys are sent only while the line is up",
   hangup: "Hang up",
   ptt_unavailable: "Talking is available during a call",
   ptt_hold: "Hold to talk",
@@ -153,6 +154,8 @@ ha-card { padding: 16px; box-sizing: border-box; }
 .custom-grid > .custom:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .dial { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
 .dial[hidden] { display: none; }
+.dial-note { font-size: 13px; color: var(--secondary-text-color); margin-top: -4px; }
+.dial-note[hidden] { display: none; }
 .dial input {
   min-width: 0; height: 48px; box-sizing: border-box; padding: 0 14px; font: inherit; font-size: 16px; letter-spacing: 1px;
   border: 1px solid var(--divider-color, #888); border-radius: 14px;
@@ -563,6 +566,7 @@ class ReselIntercomCard extends HTMLElement {
         <div class="toast"></div>
         <div class="custom-grid"></div>
         <div class="dial" hidden><input type="text" inputmode="tel" maxlength="32" autocomplete="off" spellcheck="false"><button type="button" class="btn dialbtn"><ha-icon icon="mdi:phone-outgoing"></ha-icon><span></span></button></div>
+        <div class="dial-note" hidden></div>
       </div>`;
     root.append(style, card);
     this._el = {
@@ -586,6 +590,7 @@ class ReselIntercomCard extends HTMLElement {
       toast: card.querySelector(".toast"),
       grid: card.querySelector(".custom-grid"),
       dial: card.querySelector(".dial"),
+      dialNote: card.querySelector(".dial-note"),
       dialInput: card.querySelector(".dial input"),
       dialBtn: card.querySelector(".dialbtn"),
     };
@@ -627,6 +632,7 @@ class ReselIntercomCard extends HTMLElement {
 
     // free dial: text field + button (keys are sent by the firmware over the line)
     e.dial.hidden = !this._cfg.show_dial;
+    e.dialNote.hidden = true;
     e.dialBtn.querySelector("span").textContent = this._cfg.labels.dial;
     e.dialInput.placeholder = this._cfg.labels.dial_placeholder;
     e.dialInput.addEventListener("input", () => {
@@ -819,13 +825,20 @@ class ReselIntercomCard extends HTMLElement {
       if (!c.cfg.name && s) c.label.textContent = s.attributes.friendly_name || id;
     }
 
-    // free dial: only during a call (the line must be up); the field mirrors the stored text while not being edited
+    // free dial: the field is editable whenever its entity exists; the Dial button only during a call (line up)
     if (this._cfg.show_dial) {
+      const okState = (id) => { const o = this._hass && this._hass.states[id]; return !!o && o.state !== "unavailable"; };
       const ts = this._hass && this._hass.states[this._cfg.entities.dial_text];
-      const bs = this._hass && this._hass.states[this._cfg.entities.dial_button];
-      const ok = inCall && !!ts && ts.state !== "unavailable" && !!bs && bs.state !== "unavailable";
-      e.dialInput.disabled = !ok;
-      e.dialBtn.disabled = !ok;
+      const textOk = okState(this._cfg.entities.dial_text);
+      const btnOk = okState(this._cfg.entities.dial_button);
+      e.dialInput.disabled = !textOk;
+      e.dialBtn.disabled = !(inCall && textOk && btnOk);
+      let note = "";
+      if (!textOk) note = "Entity not found or unavailable: " + this._cfg.entities.dial_text;
+      else if (!btnOk) note = "Entity not found or unavailable: " + this._cfg.entities.dial_button;
+      else if (!inCall) note = this._cfg.labels.dial_need_call;
+      e.dialNote.textContent = note;
+      e.dialNote.hidden = !note;
       if (ts && this.shadowRoot.activeElement !== e.dialInput && e.dialInput.value !== ts.state && ts.state !== "unknown" && ts.state !== "unavailable") {
         e.dialInput.value = ts.state;
       }
