@@ -196,10 +196,10 @@ buttons:                  # 2 per row under the PTT button; with an odd count th
   - name: Open door
     icon: mdi:door-open
     entity: button.resel_fxo_gateway_interfon_deschide_usa
-  - name: Call panel
+  - name: Dial
     icon: mdi:phone-outgoing
-    entity: button.resel_fxo_gateway_interfon_cheama_panoul_0
-    disabled_when: [in_call]
+    entity: button.resel_fxo_gateway_interfon_formeaza   # sends the keys typed in the firmware's "Numar de Format" field
+    disabled_when: [idle]
   - name: Mute mic
     entity: switch.resel_fxo_gateway_interfon_mute_audio
     icon: mdi:microphone
@@ -213,7 +213,7 @@ Card options (all optional; the value shown is the default). The audio and push-
 | Option | Default | What it does |
 |---|---|---|
 | `entity_prefix` | `resel_fxo_gateway_interfon_` | Prefix of the ESPHome entities. If your device name differs (for example a `hall_` area prefix), set this or list every entity under `entities`. |
-| `entities` | derived from the prefix | Explicit entity ids: `state`, `answer`, `hangup`, `ptt`, `level` (and `door_open`, `call_panel`, `answer_open` for the default buttons). Anything you set overrides the prefix. |
+| `entities` | derived from the prefix | Explicit entity ids: `state`, `answer`, `hangup`, `ptt`, `level` (and `door_open` for the default button). Anything you set overrides the prefix. |
 | `title` | `Intercom` | Card title. |
 | `show_header` | `true` | Show the title and the state chip. |
 | `show_level` | `true` | Show the level meter. |
@@ -222,7 +222,7 @@ Card options (all optional; the value shown is the default). The audio and push-
 
 **Buttons**
 
-`buttons` is a list shown two per row under the talk button. With an odd number of buttons the last one takes the whole row (for example 3 buttons: two side by side, the third full width). Without the list you get *Open door*, *Call panel* and *Answer & open*. Each button takes:
+`buttons` is a list shown two per row under the talk button. With an odd number of buttons the last one takes the whole row (for example 3 buttons: two side by side, the third full width). Without the list you get only *Open door* (it works during a call, after *Answer*). Each button takes:
 
 | Key | What it does |
 |---|---|

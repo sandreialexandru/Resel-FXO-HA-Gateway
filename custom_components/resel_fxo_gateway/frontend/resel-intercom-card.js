@@ -17,7 +17,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.5.1";
+const CARD_VERSION = "0.5.2";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -55,8 +55,6 @@ const DEFAULT_LABELS = {
 
 const DEFAULT_BUTTONS = [
   { name: "Open door", icon: "mdi:door-open", entity_key: "door_open" },
-  { name: "Call panel", icon: "mdi:phone-outgoing", entity_key: "call_panel", disabled_when: ["in_call"] },
-  { name: "Answer & open", icon: "mdi:phone-check", entity_key: "answer_open", disabled_when: ["in_call"] },
 ];
 
 // Audio / PTT settings: integration options, overridable per card in YAML. Defaults match const.py.
@@ -109,8 +107,6 @@ const DEFAULT_ENTITY_SUFFIX = {
   ptt: "switch.{p}ptt",
   level: "sensor.{p}nivel_microfon_rms",
   door_open: "button.{p}deschide_usa",
-  call_panel: "button.{p}cheama_panoul_0",
-  answer_open: "button.{p}raspunde_si_deschide_usa",
 };
 
 const CAPTURE_WORKLET = `
