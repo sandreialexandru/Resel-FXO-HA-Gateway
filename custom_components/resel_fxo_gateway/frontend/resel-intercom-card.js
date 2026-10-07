@@ -17,7 +17,7 @@
 (() => {
 "use strict";
 const DOMAIN = "resel_fxo_gateway";
-const CARD_VERSION = "0.8.1";
+const CARD_VERSION = "0.8.2";
 console.info(`%c RESEL-INTERCOM-CARD %c ${CARD_VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4;background:#fff");
 const TARGET_RATE = 16000;
 const FRAME_SAMPLES = 640; // 40 ms at 16 kHz
@@ -1225,8 +1225,36 @@ class ReselIntercomCard extends HTMLElement {
   }
 }
 
-if (!customElements.get("resel-intercom-card")) {
-  customElements.define("resel-intercom-card", ReselIntercomCard);
+// Register the element. Home Assistant may replace window.customElements a moment after the page starts
+// (scoped custom-element registry polyfill); a definition made before that swap is invisible to the new
+// registry and Lovelace reports "Custom element doesn't exist". So define now and keep checking for 30 s,
+// defining again on the new registry if it was replaced.
+const CARD_TAG = "resel-intercom-card";
+const registerCard = () => {
+  try {
+    if (!window.customElements.get(CARD_TAG)) {
+      window.customElements.define(CARD_TAG, ReselIntercomCard);
+    }
+  } catch (err) {
+    // the native registry may already hold this exact class: register a subclass on the new registry
+    if (!window.customElements.get(CARD_TAG)) {
+      try {
+        window.customElements.define(CARD_TAG, class extends ReselIntercomCard {});
+      } catch (err2) {
+        console.warn("resel-intercom-card: could not register on the current registry", err2);
+      }
+    }
+  }
+};
+registerCard();
+if (!window.__reselIntercomCardWatch) {
+  window.__reselIntercomCardWatch = true;
+  let checks = 0;
+  const watch = setInterval(() => {
+    registerCard();
+    if (++checks >= 60) clearInterval(watch);
+  }, 500);
+  window.addEventListener("location-changed", registerCard);
 }
 
 window.customCards = window.customCards || [];

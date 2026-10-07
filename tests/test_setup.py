@@ -30,6 +30,10 @@ async def test_setup_registers_resource_and_remove_deletes_it(hass):
         await hass.async_block_till_done()
         cards = _cards(hass)
         assert [c["url"] for c in cards] == [card_url(VERSION)]
+        # Storage mode: the card must NOT also be injected into the start page (that early load races
+        # with the scoped custom-element registry and makes the card intermittently missing)
+        from homeassistant.components.frontend import DATA_EXTRA_MODULE_URL
+        assert card_url(VERSION) not in hass.data[DATA_EXTRA_MODULE_URL].urls
 
         assert await hass.config_entries.async_remove(entry.entry_id)
         await hass.async_block_till_done()
