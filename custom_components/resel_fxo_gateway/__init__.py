@@ -53,12 +53,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     version = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
     # Main way: a Lovelace resource, loaded by the dashboard itself (works in browsers and in the companion app
     # even when they keep an old copy of the start page). Registered once Home Assistant has started.
+    # The start-page injection (add_extra_js_url) is ONLY a fallback for YAML-mode dashboards: it runs the
+    # card very early, sometimes before Home Assistant swaps window.customElements for the scoped
+    # custom-element registry, and then the card is intermittently "Custom element doesn't exist".
     async def _register_resource(_hass: HomeAssistant) -> None:
-        await async_register_card_resource(hass, version)
+        if not await async_register_card_resource(hass, version):
+            add_extra_js_url(hass, card_url(version))
 
     async_at_started(hass, _register_resource)
-    # Fallback: injected into the start page (same URL, so the browser runs the module only once).
-    add_extra_js_url(hass, card_url(version))
     websocket_api.async_register_command(hass, ws_subscribe_audio)
     websocket_api.async_register_command(hass, ws_send_audio)
     websocket_api.async_register_command(hass, ws_subscribe_settings)
