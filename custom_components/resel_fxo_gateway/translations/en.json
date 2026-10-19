@@ -14,6 +14,20 @@
           "port": "TCP port of the audio_tcp component.",
           "token": "Same value as audio_token in the ESPHome YAML. Leave empty if none is set."
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Resel FXO gateway",
+        "description": "Change the address of the ESP32 gateway (for example after its IP changed). Nothing else is removed: the card settings are kept.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "Token"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the ESP32.",
+          "port": "TCP port of the audio_tcp component.",
+          "token": "Same value as audio_token in the ESPHome YAML. Leave empty if none is set."
+        }
       }
     },
     "error": {
@@ -21,7 +35,8 @@
       "invalid_auth": "The ESP32 rejected the token."
     },
     "abort": {
-      "already_configured": "This gateway is already configured."
+      "already_configured": "This gateway is already configured.",
+      "reconfigure_successful": "The gateway address was updated."
     }
   },
   "options": {

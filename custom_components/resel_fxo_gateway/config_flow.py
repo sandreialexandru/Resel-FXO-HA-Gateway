@@ -124,6 +124,41 @@ class ReselFxoGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
 
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Change the host, port or token of an existing gateway without removing the integration."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            host = user_input[CONF_HOST].strip()
+            token = user_input.get(CONF_TOKEN, "")
+            if any(
+                other.entry_id != entry.entry_id and other.unique_id == host.lower()
+                for other in self.hass.config_entries.async_entries(DOMAIN)
+            ):
+                return self.async_abort(reason="already_configured")
+            error = await validate_connection(host, user_input[CONF_PORT], token)
+            if error is None:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    unique_id=host.lower(),
+                    title=f"Resel FXO gateway ({host})",
+                    data_updates={CONF_HOST: host, CONF_PORT: user_input[CONF_PORT], CONF_TOKEN: token},
+                )
+            errors["base"] = error
+            current = user_input
+        else:
+            current = dict(entry.data)
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_HOST, default=current.get(CONF_HOST, "")): str,
+                vol.Required(CONF_PORT, default=current.get(CONF_PORT, DEFAULT_PORT)): int,
+                vol.Optional(CONF_TOKEN, default=current.get(CONF_TOKEN, "")): str,
+            }
+        )
+        return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
+
+
 class ReselFxoGatewayOptionsFlow(OptionsFlow):
     """Card audio settings: talk, line filters, line cleaning."""
 

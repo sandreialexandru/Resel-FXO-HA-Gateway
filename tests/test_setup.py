@@ -38,3 +38,24 @@ async def test_setup_registers_resource_and_remove_deletes_it(hass):
         assert await hass.config_entries.async_remove(entry.entry_id)
         await hass.async_block_till_done()
         assert _cards(hass) == []
+
+
+async def test_adding_the_gateway_back_registers_the_resource_again(hass):
+    """Removing the last entry deletes the resource; async_setup does not run again, setup_entry must redo it."""
+    assert await async_setup_component(hass, "http", {})
+    assert await async_setup_component(hass, "lovelace", {})
+    with patch("custom_components.resel_fxo_gateway.AudioBridge") as bridge_cls:
+        bridge_cls.return_value = MagicMock(async_close=AsyncMock())
+        first = MockConfigEntry(domain=DOMAIN, data={"host": "192.0.2.1", "port": 6054, "token": ""})
+        first.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(first.entry_id)
+        await hass.async_block_till_done()
+        assert await hass.config_entries.async_remove(first.entry_id)
+        await hass.async_block_till_done()
+        assert _cards(hass) == []
+
+        second = MockConfigEntry(domain=DOMAIN, data={"host": "192.0.2.5", "port": 6054, "token": ""})
+        second.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(second.entry_id)
+        await hass.async_block_till_done()
+        assert [c["url"] for c in _cards(hass)] == [card_url(VERSION)]

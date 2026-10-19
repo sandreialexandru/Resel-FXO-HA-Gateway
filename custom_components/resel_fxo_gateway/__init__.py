@@ -42,25 +42,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     frontend_dir = Path(__file__).parent / "frontend"
     # cache_headers=True lets the browser / companion app keep the card after the first download, so it is
     # available instantly when the app restarts (e.g. after switching from mobile data to Wi-Fi). Safe, because
-    # the URL carries the version below: every release gets a new URL and is fetched again.
+    # the URL carries the version below: every release gets a new URL (the version is added to it when the card is registered) and is fetched again.
     try:
         await hass.http.async_register_static_paths(
             [StaticPathConfig(CARD_URL_BASE, str(frontend_dir), cache_headers=True)]
         )
     except RuntimeError:
         _LOGGER.debug("Static path %s is already registered", CARD_URL_BASE)
-    # the version in the URL makes browsers fetch the new card after every release
-    version = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
-    # Main way: a Lovelace resource, loaded by the dashboard itself (works in browsers and in the companion app
-    # even when they keep an old copy of the start page). Registered once Home Assistant has started.
-    # The start-page injection (add_extra_js_url) is ONLY a fallback for YAML-mode dashboards: it runs the
-    # card very early, sometimes before Home Assistant swaps window.customElements for the scoped
-    # custom-element registry, and then the card is intermittently "Custom element doesn't exist".
-    async def _register_resource(_hass: HomeAssistant) -> None:
-        if not await async_register_card_resource(hass, version):
-            add_extra_js_url(hass, card_url(version))
-
-    async_at_started(hass, _register_resource)
     websocket_api.async_register_command(hass, ws_subscribe_audio)
     websocket_api.async_register_command(hass, ws_send_audio)
     websocket_api.async_register_command(hass, ws_subscribe_settings)
@@ -70,6 +58,20 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     bridge = AudioBridge(entry.data[CONF_HOST], entry.data[CONF_PORT], entry.data.get(CONF_TOKEN, ""))
     hass.data[DOMAIN][entry.entry_id] = bridge
+    # Main way to load the card: a Lovelace resource, loaded by the dashboard itself (works in browsers and in
+    # the companion app even when they keep an old copy of the start page). Registered once Home Assistant has
+    # started, and again every time an entry is set up: removing the last entry deletes the resource, and
+    # async_setup only runs once per start, so adding the gateway back would otherwise leave it without one.
+    # The start-page injection (add_extra_js_url) is ONLY a fallback for YAML-mode dashboards: it runs the
+    # card very early, sometimes before Home Assistant swaps window.customElements for the scoped
+    # custom-element registry, and then the card is intermittently "Custom element doesn't exist".
+    version = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
+
+    async def _register_resource(_hass: HomeAssistant) -> None:
+        if not await async_register_card_resource(hass, version):
+            add_extra_js_url(hass, card_url(version))
+
+    async_at_started(hass, _register_resource)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 

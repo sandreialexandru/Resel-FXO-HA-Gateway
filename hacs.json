@@ -1,4 +1,5 @@
 {
   "name": "Resel FXO HA Gateway",
-  "render_readme": false
+  "render_readme": false,
+  "homeassistant": "2024.11.0"
 }
