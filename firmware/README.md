@@ -20,6 +20,4 @@ The behaviour of the firmware is described in detail in [`../hardware/README.md`
 - **Ring detection**: the switch *Interfon Detectie Sonerie ADC* must be **ON** (it is the detector that works on rev C).
   The entity `Interfon Sonerie` is the one to use in automations; *Sonerie Brut (diag)* and *Sonerie Impuls IO33* are diagnostics only.
 
-## Files
 
-Add your own files here. Nothing is generated automatically.
