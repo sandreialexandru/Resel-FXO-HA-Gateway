@@ -11,8 +11,10 @@ The project connects the **interior unit of a Resel building intercom** (a phone
 | ESPHome component `audio_tcp` | [`components/audio_tcp`](components/audio_tcp) | TCP server on the ESP32 that streams the line audio out and plays audio received from a client |
 | Home Assistant integration `resel_fxo_gateway` | [`custom_components/resel_fxo_gateway`](custom_components/resel_fxo_gateway) | Bridges the ESP32 audio port to the browser through the Home Assistant websocket, and serves the card |
 | Lovelace card `resel-intercom-card` | [`custom_components/.../frontend`](custom_components/resel_fxo_gateway/frontend/resel-intercom-card.js) | Answer, hang up, push-to-talk, live line level, four custom buttons |
+| ESPHome firmware | [`firmware`](firmware) | The YAML of the gateway (ring detection, hook control, dialing, codec setup) |
+| Schematic and PCB | [`hardware`](hardware) | Schematic, PCB and a detailed explanation of the circuit and the firmware ([`hardware/README.md`](hardware/README.md)) |
 
-Everything else (ring detection, hook control, dialing, codec setup) is plain ESPHome YAML on the ESP32 and uses the standard Home Assistant ESPHome integration.
+Everything else (ring detection, hook control, dialing, codec setup) is plain ESPHome YAML on the ESP32 (see [`firmware`](firmware)) and uses the standard Home Assistant ESPHome integration. How the circuit and the firmware work, in detail: [`hardware/README.md`](hardware/README.md).
 
 > **Status: hobby project, partly tested.** Ring detection, answering, hang-up, pulse and DTMF dialing, and audio from the intercom to the ESP32 work on the real line. See [Status](#status) for what is and is not verified.
 
@@ -59,7 +61,7 @@ The Home Assistant side keeps **one** connection to the ESP32 and fans it out to
 - Resel "Interfon de scară cu carduri de proximitate": exterior central unit, power supply (5 V / 12 V / 48 V DC, 12 V battery backup recommended), floor distributors, and the interior post in each apartment, connected with RJ11 on 2 wires.
 - The interior post is a wall-mounted keypad phone working in **tone (DTMF)** mode with a dual-tone ringer. It has a TONE/PULSE switch and a RINGER ON/OFF switch.
 - Resel support: the line follows the PBX standard as closely as possible, and the ring signal is **75–120 V AC at about 27 Hz**.
-- Measured on a multimeter: on hook the line sits around **50 V**; during a ring the AC voltage jumps to about **50–60 V** and drops to 0 in a repeating burst pattern.
+- Measured on a multimeter (DC range): on hook the line sits around **3 V**, with the handset lifted about **8 V**, and during a ring about **45–48 V** (the reading fluctuates quickly; the waveform was never seen on an oscilloscope). The ring comes in bursts about 3 s apart.
 - Measured with the ESP32 circuit: with the hook output high the line reads about **8 V**, the same as with the handset lifted.
 - The speaker and microphone gain potentiometers are on the exterior central unit, not in the apartment.
 - The street panel (ISCP-01N-50 MF) has software gains **u2 (microphone)** and **u1 (speaker)**, 0-19, adjusted from the panel keypad during a call after typing the settings access code and `*` (display shows `uu`; keys 3/6 = mic up/down, 1/4 = speaker up/down). The access code is set by the installer. If the visitor's voice is weak, raising u2 gives more than any gain on the ESP side, because it improves the signal before the noise.
@@ -74,14 +76,14 @@ Note: the commercial Emblyx controller for Resel systems offers Apple Home, Goog
 
 ## Hardware
 
-A short overview only; the full schematic is not part of this repository.
+A short overview. The schematic and PCB are in [`hardware`](hardware), and [`hardware/README.md`](hardware/README.md) explains every block of the circuit in detail (current revision: **rev C**).
 
 | Block | Part / value | Role |
 |---|---|---|
 | MCU | ESP32 DevKitC (WROOM-32E), ESPHome on ESP-IDF | Everything digital |
 | Audio codec | WM8960 breakout, 24 MHz on-board oscillator, no MCLK pin | Line ↔ I2S, 16 kHz; codec PLL makes 12.288 MHz SYSCLK |
 | Line isolation | 1:1 600 Ω audio transformer (SM-LP-5001) | Galvanic isolation for voice |
-| Ring detection | Series 0.47 µF / 275 V capacitor, bridge, TVS, PC817-type optocoupler, RC network on `RING_DET` | High-impedance ring sensing |
+| Ring detection | Series 0.47 µF / 275 V capacitor (C11) with a 1 kΩ resistor in parallel, 4.7 kΩ, **P6KE33A** TVS (D4), EL817-type optocoupler, RC network on `RING_DET` | Ring sensing by voltage level; the TVS makes the optocoupler ignore the small impulses seen in standby |
 | Hook control | Transistor driving an optocoupler + load resistor | Off-hook (answer, pulse dialing) |
 
 ESP32 pins:
@@ -94,6 +96,7 @@ ESP32 pins:
 | I2S ADCDAT (codec → ESP32) | 35 |
 | Hook control (high = off-hook, held low by 10 kΩ resistors at boot) | 32 |
 | Ring detection node (digital + ADC) | 34 |
+| Ring pulse diagnostic (optocoupler emitter) | 33 |
 
 Safety: the hook output is held low in hardware, so the line cannot go off-hook while the ESP32 is in reset or booting. The firmware also drops the line after a watchdog timeout. **The line side carries ring voltage (75–120 V AC); build and test with care.**
 
@@ -104,6 +107,19 @@ Safety: the hook output is held low in hardware, so the line cannot go off-hook 
 All measured on the real line of the author's apartment.
 
 ### Ring detection
+
+Rev C (current board, TVS P6KE33A, 1 kΩ in parallel with C11, ADC detector switch **ON**):
+
+| Item | Value |
+|---|---|
+| `RING_DET` node at rest | about 0.15 V (ADC offset) |
+| Node on a real ring | 3.1 V (ADC full scale) on each burst |
+| Bursts | about 3.2 s apart; the node falls below 1 V in about 2 s |
+| IO33 | goes On on every burst |
+| Standby with a 24 V TVS | impulses up to about 1.2 V every 1.5–2 s (this is why the TVS is 33 V) |
+| Entity to use | `Interfon Sonerie` (the raw digital sensor *Sonerie Brut (diag)* stayed Off on rev C, diagnostic only) |
+
+First prototype (no longer existing), for reference:
 
 | Item | Value |
 |---|---|
@@ -164,7 +180,7 @@ audio_tcp:
   speaker: intercom_speaker       # your i2s_audio speaker
 ```
 
-In the microphone `on_data` lambda, forward blocks with `id(audio_hub).push_mic((const uint8_t *) x.data(), bytes);`. On PTT switch on/off call `id(audio_hub).set_talk(true/false);`. The full firmware (codec init, ring detection, hook control, dialing, PTT) is not published here yet.
+In the microphone `on_data` lambda, forward blocks with `id(audio_hub).push_mic((const uint8_t *) x.data(), bytes);`. On PTT switch on/off call `id(audio_hub).set_talk(true/false);`. The firmware (codec init, ring detection, hook control, dialing, PTT) goes in [`firmware`](firmware); how it works is explained in [`hardware/README.md`](hardware/README.md).
 
 Needs ESP-IDF and a recent ESPHome (developed on 2026.9).
 
@@ -291,7 +307,8 @@ Any of these keys can still be written in a card's YAML; there it overrides the 
 
 **Works on the real line**
 
-- Ring detection (digital and optional ADC), including the 6 s hold and the post-hook lockout
+- Ring detection on rev C through the ADC detector (33 V TVS, 1 kΩ across C11), including the 6 s hold and the post-hook lockout
+- Hook cycle at boot, so the line starts in a known state
 - Off-hook, hang-up, 1-minute watchdog
 - Pulse dialing: door opens with `0`, other numbers can be dialed
 - DTMF dialing for the building panel (`#0`) and for other apartments (free dial field, with adjustable tone, gap and level)
@@ -306,6 +323,8 @@ Any of these keys can still be written in a card's YAML; there it overrides the 
 
 **Not yet verified**
 
+- Ring detection reliability over 12–24 h without a manual hook cycle
+- Transmit path (card → line) with push-to-talk on rev C
 - Voice level of the visitor is still low; raising the panel's u2 software gain is the next step
 - Intelligibility of the voice sent *to* the panel
 - Door opening with a DTMF `0` in every situation (it works with 450 ms tones; pulse also works)
@@ -325,6 +344,8 @@ Any of these keys can still be written in a card's YAML; there it overrides the 
 
 ```
 components/audio_tcp/                 ESPHome external component (C++)
+firmware/                             ESPHome YAML of the gateway
+hardware/                             schematic, PCB and README (circuit + firmware explained)
 custom_components/resel_fxo_gateway/  Home Assistant integration
   card_resource.py                    registers the card as a Lovelace resource
   frontend/resel-intercom-card.js     Lovelace card
